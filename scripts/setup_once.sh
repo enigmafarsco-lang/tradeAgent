@@ -64,52 +64,82 @@ H="${MQL5_DIR:+$MQL5_DIR/Files/harvester}"
 ok "MQL5 dir : ${MQL5_DIR:-not found}"
 ok "output   : ${H:-not found}"
 
-step "2/5 start terminal with chart + EA"
+step "2/5 start terminal"
 TERM_EXE="$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'terminal64.exe' 2>/dev/null | head -n1)"
 [[ -n "$TERM_EXE" ]] || { bad "terminal64.exe not found"; exit 1; }
 
-if pgrep -f 'terminal64\.exe' >/dev/null 2>&1; then
-  if [[ $RESTART -eq 1 ]]; then
-    pkill -f 'terminal64\.exe' 2>/dev/null || true
-    sleep 3
-    ok "closed the running terminal"
-  else
-    hint "terminal is running and --no-restart was given; /config will not apply"
+bases_dir() {
+  find "$PREFIX/drive_c" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*/bases' 2>/dev/null | head -n1
+}
+
+logged_in() {
+  local b; b="$(bases_dir)"
+  [[ -n "$b" && -n "$(ls -A "$b" 2>/dev/null)" ]]
+}
+
+launch() {
+  if pgrep -f 'terminal64\.exe' >/dev/null 2>&1; then
+    if [[ $RESTART -eq 1 ]]; then
+      pkill -f 'terminal64\.exe' 2>/dev/null || true
+      sleep 3
+      ok "closed the running terminal"
+    else
+      hint "terminal is running and --no-restart was given; /config will not apply"
+      return 0
+    fi
   fi
-fi
+  local args=()
+  [[ -f "$INI" ]] && args+=("/config:Z:${INI//\//\\}")
+  nohup wine "$TERM_EXE" "${args[@]}" >>"$ROOT/var/logs/mt5.out" 2>&1 &
+  sleep 5
+  pgrep -f 'terminal64\.exe' >/dev/null 2>&1 && ok "terminal started (log: var/logs/mt5.out)" || bad "terminal did not start; see var/logs/mt5.out"
+}
 
-WIN_INI="Z:${INI//\//\\}"
-nohup wine "$TERM_EXE" "/config:$WIN_INI" >>"$ROOT/var/logs/mt5.out" 2>&1 &
-sleep 5
-if pgrep -f 'terminal64\.exe' >/dev/null 2>&1; then
-  ok "terminal started (log: var/logs/mt5.out)"
-else
-  bad "terminal did not start; check var/logs/mt5.out"
-fi
+launch
 
-step "3/5 waiting for status.json (max ${WAIT}s)"
+step "3/5 waiting for status.json (max ${WAIT}s per attempt, 2 attempts)"
 FOUND=0
-for ((i = 1; i <= WAIT; i++)); do
-  [[ -n "$H" && -f "$H/status.json" ]] && { FOUND=1; break; }
-  if (( i % 25 == 0 )); then
+REATTACHED=0
+for attempt in 1 2; do
+  for ((i = 1; i <= WAIT; i++)); do
     NEW="$(find "$PREFIX/drive_c" -maxdepth 13 -type d -path '*MQL5/Files/harvester' 2>/dev/null | head -n1)"
     [[ -n "$NEW" ]] && H="$NEW"
+    [[ -n "$H" && -f "$H/status.json" ]] && { FOUND=1; break; }
+    if [[ $REATTACHED -eq 0 ]] && logged_in; then break; fi
+    sleep 1
+  done
+  [[ $FOUND -eq 1 ]] && break
+
+  if [[ $REATTACHED -eq 0 ]] && logged_in; then
+    ok "account is logged in now -> re-reading the real symbol list"
+    ./scripts/attach_harvester.sh --quiet || true
+    INITXT="$(grep -m1 '^Symbol=' "$INI" 2>/dev/null || true)"
+    if [[ -n "$INITXT" ]]; then
+      ok "chart symbol from terminal: ${INITXT#Symbol=}"
+    else
+      warn "still no symbol in the terminal"
+    fi
+    REATTACHED=1
+    launch
+    continue
   fi
-  sleep 1
+  break
 done
 
 if [[ $FOUND -eq 1 ]]; then
   ok "recording started: $H/status.json"
   head -c 400 "$H/status.json"; echo
 else
-  bad "EA has not written anything yet"
-  if [[ -n "$H" && -d "$H" ]]; then
-    echo "  dir exists but is empty: $(ls -A "$H" | tr '\n' ' ')"
-  else
-    echo "  harvester dir does not exist"
+  if ! logged_in; then
+    bad "the terminal is NOT logged in (bases/ is empty) -> no symbols, no chart, no ticks"
+    hint "log in once in the MT5 window (File -> Login to Trade Account), then rerun:"
+    hint "  ./scripts/setup_once.sh --no-restart --wait 120"
+    exit 4
   fi
-  hint "in MT5: Ctrl+N -> Expert Advisors -> TickHarvester -> drag onto the chart"
-  hint "        -> check 'Allow Algo Trading' -> OK -> Algo Trading button green"
+  bad "logged in, but the EA has not written anything yet"
+  [[ -n "$H" && -d "$H" ]] && echo "  harvester dir exists, contents: $(ls -A "$H" | tr '\n' ' ')"
+  hint "MT5: Ctrl+N -> Expert Advisors -> TickHarvester -> drag onto a chart"
+  hint "     -> check 'Allow Algo Trading' -> OK -> 'Algo Trading' button green"
   hint "then: ./scripts/setup_once.sh --no-restart --wait 120"
   exit 3
 fi
