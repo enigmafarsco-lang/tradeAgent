@@ -42,6 +42,67 @@ git --version
 
 GitHub Desktop **لازم نیست**. گزارش‌ها هم بدون آن پوش می‌شوند (`git` + توکن/SSH).
 
+## ۲ب) GitHub Desktop — وقتی مخزن apt کار نمی‌کند
+
+اگر `apt.packages.shiftkey.dev` بلاک/بدگواهی است، سه راه مستقل از آن مخزن:
+
+### راه ۱ — فید جایگزین (@mwt)
+
+```bash
+wget -qO- https://mirror.mwt.me/shiftkey-desktop/gpgkey | gpg --dearmor | sudo tee /usr/share/keyrings/mwt-desktop.gpg >/dev/null
+sudo sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mwt-desktop.gpg] https://mirror.mwt.me/shiftkey-desktop/deb/ any main" > /etc/apt/sources.list.d/mwt-desktop.list'
+sudo apt update && sudo apt install -y github-desktop
+```
+
+### راه ۲ — فایل `.deb` مستقیم از Releases (بدون apt repo، بدون کلید)
+
+نسخه‌ی پایدار فعلی فورک لینوکس `3.4.13-linux1` است:
+
+```bash
+cd ~/Downloads
+curl -L --fail -O https://github.com/shiftkey/desktop/releases/download/release-3.4.13-linux1/GitHubDesktop-linux-amd64-3.4.13-linux1.deb
+sudo apt install -y ./GitHubDesktop-linux-amd64-3.4.13-linux1.deb
+github-desktop --version
+```
+
+روی اوبونتو ۲۴.۰۴ اگر `apt install ./...deb` به‌خاطر نام بسته‌های صوتی
+(`libasound2` در برابر `libasound2t64`) خطا داد، از AppImage استفاده کن (راه ۴).
+
+### راه ۳ — کپی `.deb` از اوبونتوی دیگری که نصبش دارد
+
+```bash
+# روی آن ماشین:
+cd ~/Downloads && apt-get download github-desktop
+ls -lh github-desktop_*.deb
+# یا اگر در کش هست:
+ls /var/cache/apt/archives/github-desktop_*.deb
+
+# انتقال (USB یا scp) و نصب روی این ماشین:
+sudo apt install -y ./github-desktop_*.deb
+```
+
+### راه ۴ — AppImage (بدون نصب، بدون وابستگی بسته)
+
+```bash
+sudo apt install -y libfuse2
+cd ~/Downloads
+curl -L --fail -O https://github.com/shiftkey/desktop/releases/download/release-3.4.13-linux1/GitHubDesktop-linux-x86_64-3.4.13-linux1.AppImage
+chmod +x GitHubDesktop-linux-x86_64-3.4.13-linux1.AppImage
+./GitHubDesktop-linux-x86_64-3.4.13-linux1.AppImage
+```
+
+### راه ۵ — Flatpak
+
+```bash
+sudo apt install -y flatpak
+flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak install -y flathub io.github.shiftey.Desktop
+flatpak run io.github.shiftey.Desktop
+```
+
+> پیش‌نیاز مشترک همه‌ی راه‌ها: `git` سیستمی (`sudo apt install -y git`). GitHub Desktop
+> روی لینوکس از همان `git` استفاده می‌کند و نسخه‌ی داخلی ندارد.
+
 ## ۳) رابط گرافیکی، اگر واقعاً می‌خواهی
 
 به‌ترتیب کم‌دردسرترین گزینه‌ها:
