@@ -38,5 +38,20 @@ if [[ -d "$LOGS" ]]; then
   echo "--- ۱۵ خط آخر لاگ ---"
   tail -n 15 "$LOGS/$NEWEST" 2>/dev/null | sed 's/^/    /'
 else
-  warn "پوشه‌ی Logs نیست."
+  warn "پوشه‌ی Logs نیست → یعنی این MQL5 پوشه‌ی داده‌ی ترمینال نیست."
+  echo "--- فرآیند ترمینال در حال اجرا ---"
+  PID="$(pgrep -f 'terminal64\.exe' | head -n1)"
+  if [[ -n "$PID" ]]; then
+    log "pid=$PID"
+    tr '\0' '\n' < "/proc/$PID/environ" 2>/dev/null | grep -E '^(WINEPREFIX|WINEARCH|DISPLAY|WAYLAND_DISPLAY|HOME)=' | sed 's/^/    /'
+    log "فایل اجرایی: $(readlink -f "/proc/$PID/exe" 2>/dev/null)"
+  else
+    warn "ترمینال در حال اجرا نیست."
+  fi
+  echo "--- پوشه‌های MetaQuotes موجود ---"
+  find "$PREFIX" "$HOME/.wine" -maxdepth 14 -type d -path '*MetaQuotes*' 2>/dev/null | sed 's/^/    /'
+  echo "--- هر status.json در سیستم ---"
+  find "$PREFIX" "$HOME/.wine" -maxdepth 16 -name status.json -path '*harvester*' 2>/dev/null | sed 's/^/    /'
+  echo "--- هر Logs زیر MQL5 ---"
+  find "$PREFIX" "$HOME/.wine" -maxdepth 16 -type d -path '*MQL5/Logs' 2>/dev/null | sed 's/^/    /'
 fi
