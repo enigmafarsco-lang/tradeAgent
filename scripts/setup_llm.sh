@@ -20,7 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
 OLLAMA_URL="${TRADEAGENT_OLLAMA_URL:-http://127.0.0.1:11434}"
 DEFAULT_OLLAMA="${TRADEAGENT_OLLAMA_MODEL:-qwen2.5:7b-instruct}"
-PREFERRED_GEMINI="${TRADEAGENT_LLM_MODEL:-gemini-2.5-flash}"
+PREFERRED_GEMINI="${TRADEAGENT_LLM_MODEL:-gemini-3.8-flash}"
+SLEEP_S="${LLM_SETUP_SLEEP:-3}"
 API_BASE="https://generativelanguage.googleapis.com/v1beta"
 
 ok()   { printf '\033[1;32m[llm]\033[0m %s\n' "$*"; }
@@ -159,14 +160,12 @@ gemini_probe() {
   local cands; cands="$(gemini_candidates)"
   [[ -z "$cands" ]] && { BODY='{"error":{"message":"no generateContent model for this key"}}'; return 3; }
 
-  local queue model sug
+  local queue model sug tried_n=0 fails=""
   queue="$(echo $cands)"
-  local guard=0
-  while [[ -n "$queue" && $guard -lt 6 ]]; do
-    guard=$((guard + 1))
+  while [[ -n "$queue" && $tried_n -lt 3 ]]; do
     model="${queue%% *}"
     queue="${queue#"$model"}"; queue="${queue# }"
-    [[ "$model" == "${GEMINI_MODEL_TRIED:-}" ]] && continue
+    tried_n=$((tried_n + 1))
     if [[ ${#seq[@]} -gt 0 && $i -lt ${#seq[@]} ]]; then
       CODE="${seq[$i]%%|*}"; BODY="${seq[$i]#*|}"; i=$((i+1))
     elif [[ -n "${GEMINI_GEN_MOCK:-}" ]]; then
@@ -178,32 +177,58 @@ gemini_probe() {
     if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
     [[ "${CODE:-000}" == "000" ]] && return 2
     dim "model $model -> http ${CODE:-000}"
-    # 503 (شلوغی موقت) و 429 (سهمیه‌ی لحظه‌ای): همان مدل را یک‌بار دیگر امتحان کن
-    if [[ "${CODE:-}" == "503" || "${CODE:-}" == "429" ]]; then
-      dim "transient - retrying $model in 3s"
-      sleep 3
-      if [[ -n "${MOCK_RETRY_200:-}" ]]; then
-        CODE="200"; BODY='{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
-      else
-        http_post "$API_BASE/models/$model:generateContent?key=$key" \
-          '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
-      fi
-      if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
-      dim "model $model -> http ${CODE:-000} again"
-    fi
-    # اگر گوگل جانشین معرفی کرد، همان اول صف بیاید
-    sug="$(python3 -c '
+    fails="$fails$model=${CODE:-000} "
+
+    LAST_CODE="${CODE:-000}"
+    case "${CODE:-}" in
+      503)   # شلوغی موقت: فقط یک‌بار همان مدل
+        dim "overloaded - one retry in ${SLEEP_S}s"
+        sleep "$SLEEP_S"
+        if [[ -n "${MOCK_RETRY_200:-}" ]]; then
+          CODE="200"; BODY='{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+        else
+          http_post "$API_BASE/models/$model:generateContent?key=$key" \
+            '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
+        fi
+        if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
+        dim "model $model -> http ${CODE:-000} again" ;;
+      429)   # سهمیه: تلاش دوباره بی‌فایده است، مدل بعدی
+        dim "quota for $model - moving on" ;;
+      400|403)
+        return 1 ;;   # کلید مشکل دارد، بقیهٔ مدل‌ها را امتحان نکن
+      404)
+        sug="$(python3 -c '
 import re,sys
 t=sys.stdin.read()
 if "no longer available" in t.lower() or "use models/" in t.lower():
     for n in re.findall(r"models/([A-Za-z0-9._-]{3,})", t):
         if not n.startswith("gemini-2.5"): print(n); break
 ' <<< "$BODY")"
-    case "$sug" in *tts*|*image*|*tts*|*audio*|*embed*|*vision*) sug="" ;; esac
-    [[ -n "$sug" ]] && queue="$sug $queue"
-    [[ "${CODE:-000}" == "400" || "${CODE:-000}" == "403" ]] && break
+        case "$sug" in *tts*|*image*|*audio*|*embed*) sug="" ;; esac
+        [[ -n "$sug" ]] && queue="$sug $queue" ;;
+    esac
   done
-  return 1
+
+  # هیچ مدلی جواب نداد: دقیقاً بگو چرا
+  bad "Google accepted the key but no text model answered: $fails"
+  local quota
+  quota="$(printf '%s' "$BODY" | json_field quotaId | head -n1)"
+  case "${CODE:-}" in
+    429) warn "this is a QUOTA answer, not a bad key: the free tier of this project has"
+         warn "no room right now for these models${quota:+ ($quota)}"
+         echo "    - wait a few minutes; free tier resets per minute and per day"
+         echo "    - or check the quota page of that key's project (AI Studio -> Usage)"
+         echo "    - or switch to the local model: ./scripts/setup_llm.sh --install-ollama" ;;
+    503) warn "this is CAPACITY, not a bad key: Google says the models are in high demand."
+         echo "    - retry in a few minutes: ./scripts/setup_llm.sh"
+         echo "    - or use the local model meanwhile: ./scripts/setup_llm.sh --install-ollama" ;;
+  esac
+  echo "    meanwhile the loop keeps running with deterministic decisions."
+  case "${LAST_CODE:-}" in
+    429) return 4 ;;
+    503) return 5 ;;
+  esac
+  return 3
 }
 
 report_failure() {
@@ -214,6 +239,12 @@ report_failure() {
   return 0
 }
 
+info_key_ok() {
+  ok "the stored key itself is fine - Google's quota/capacity is the limit right now"
+  echo "    the loop keeps running with deterministic decisions; retry later,"
+  echo "    or switch to the local model: ./scripts/setup_llm.sh --install-ollama"
+}
+
 interactive() {
   local k usable=0
   k="$(env_get GEMINI_API_KEY)"
@@ -222,7 +253,8 @@ interactive() {
   if (( usable )); then
     echo "stored key: $(mask "$(sanitize "$k")")"
     gemini_probe "$(sanitize "$k")"
-    case $? in
+    local rc=$?
+    case $rc in
       0) local stored; stored="$(env_get TRADEAGENT_LLM_MODEL)"
          if [[ "$stored" != "$GEMINI_MODEL_OK" ]]; then
            set_env TRADEAGENT_LLM_MODEL "$GEMINI_MODEL_OK"
@@ -233,6 +265,7 @@ interactive() {
          echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
          return 0 ;;
       1) report_failure "the stored key was rejected"; dim "paste a fresh one below" ;;
+      4|5) info_key_ok; return 0 ;;
       2) warn "network: generativelanguage.googleapis.com is not reachable from here" ;;
       *) report_failure "unexpected answer" ;;
     esac
@@ -344,6 +377,8 @@ do_gemini() {
        ok "now: systemctl --user restart tradeagent-loop.service" ;;
     1) report_failure "the API rejected this key"
        dim "nothing written to .env"; return 1;;
+    3) report_failure "no usable answer from the API"; return 1;;
+    4|5) dim "the key is fine - the model side is the problem (see above)"; return 1;;
     2) bad "cannot reach generativelanguage.googleapis.com from this machine"
        dim "test: curl -sS -o /dev/null -w '%{http_code}\\n' https://generativelanguage.googleapis.com"
        dim "behind a proxy? export https_proxy=http://127.0.0.1:PORT then retry"

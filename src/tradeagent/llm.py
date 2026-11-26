@@ -162,8 +162,8 @@ class LLMAdvisor:
                     raw = exc.read().decode("utf-8", errors="replace")
                 except Exception:  # noqa: BLE001 - متن خطا اختیاری است
                     raw = ""
-                if exc.code in (503, 429) and attempt == 0:
-                    LOG.warning("مدل %s موقتاً شلوغ است (HTTP %s) - ۳ ثانیه بعد دوباره", self.model, exc.code)
+                if exc.code == 503 and attempt == 0:
+                    LOG.warning("مدل %s موقتاً شلوغ است (HTTP 503) - ۳ ثانیه بعد دوباره", self.model)
                     time.sleep(3)
                     continue
                 new_model = suggested_model(raw) if exc.code == 404 else None
@@ -176,6 +176,8 @@ class LLMAdvisor:
                     meta["model_switched_to"] = new_model
                     url = GEMINI_URL.format(model=self.model, key=key)
                     continue
+                if exc.code == 429:
+                    meta["quota"] = raw[:300]
                 if raw:
                     exc.args = (*exc.args, raw[:400])
                 raise
