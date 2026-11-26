@@ -152,6 +152,25 @@ systemctl --user start tradeagent-loop
 
 هر سه حالت فقط روی `.env` (که در گیت نیست) می‌نویسند؛ هیچ کلیدی در ریپو نمی‌رود.
 
+### سخت‌افزار و اینکه مدل روی CPU است یا GPU
+
+```bash
+./scripts/setup_llm.sh --hardware
+```
+
+چه می‌گوید: مدل CPU و تعداد رشته‌ها و RAM از `/proc`، کارت گرافیک از `nvidia-smi`
+یا `lspci`، و مهم‌تر از همه پاسخ خودِ Ollama از `/api/ps`:
+
+* `0 GB on the GPU -> CPU only` یعنی مدل با پردازنده اجرا می‌شود؛ GPU لازم نیست.
+* `5.0 GB on the GPU -> GPU` یعنی واقعاً روی کارت گرافیک است (`size_vram`).
+
+### سرویس ماندگار Ollama
+
+اگر `systemctl restart ollama` بگوید `Unit ollama.service not found`، یعنی سرویس
+سیستمی ساخته نشده. `./scripts/setup_llm.sh --repair-ollama` یک **سرویس کاربری**
+می‌سازد (`~/.config/systemd/user/ollama.service`، `Restart=always`) و روشنش می‌کند تا
+بعد از ریبوت هم مدل بالا بیاید.
+
 ### اگر Ollama نصب است ولی جواب نمی‌دهد
 
 نشانه: `error starting llama-server: llama-server binary not found`.

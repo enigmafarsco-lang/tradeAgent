@@ -8,6 +8,7 @@
 #   ./scripts/setup_llm.sh --diagnose            show the provider's own answer, key masked
 #   ./scripts/setup_llm.sh --install-ollama      install ollama (sudo) + pull the model
 #   ./scripts/setup_llm.sh --repair-ollama       fix a half-finished install (llama-server missing)
+#   ./scripts/setup_llm.sh --hardware            CPU/RAM/GPU and what ollama really uses
 #   ./scripts/setup_llm.sh --ollama [model]      use an ollama that is already installed
 #   ./scripts/setup_llm.sh --off                 deterministic decisions only
 #
@@ -412,12 +413,67 @@ repair_ollama() {
   return $?
 }
 
+ensure_ollama_unit() {
+  # ۰) سرویس سیستمی هست؟ کاری لازم نیست
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+    return 0
+  fi
+  # ۱) بدون systemd اصلاً نمی‌توان unit ساخت
+  if ! command -v systemctl >/dev/null 2>&1; then
+    dim "no systemctl here - ollama stays a background process"
+    return 3
+  fi
+  local dir="$HOME/.config/systemd/user" bin
+  bin="$(command -v ollama 2>/dev/null)"
+  [[ -n "$bin" ]] || return 3
+  mkdir -p "$dir"
+  cat > "$dir/ollama.service" <<UNIT
+[Unit]
+Description=Ollama local model server (tradeAgent)
+
+[Service]
+ExecStart=$bin serve
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload 2>/dev/null
+  if systemctl --user enable --now ollama.service 2>/dev/null; then
+    ok "user service installed: ollama.service (survives logout/reboot: loginctl enable-linger $USER)"
+    return 0
+  fi
+  return 2
+}
+
 ollama_restart_and_verify() {
   local model="${1:-$DEFAULT_OLLAMA}"
 
+  local has_sys=0
+  command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service' && has_sys=1
+  local has_user=0
+  command -v systemctl >/dev/null 2>&1 && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service' && has_user=1
+
+  if (( has_sys )); then
+    :   # سرویس سیستمی، پایین ری‌استارت می‌شود
+  elif ollama_up && (( has_user == 0 )); then
+    # سرور دستی بالا آمده و واحدی ندارد: به واحد کاربری منتقلش کن تا بعد از ریبوت هم بماند
+    dim "moving the hand-started server into a user service"
+    pkill -f 'ollama serve' 2>/dev/null
+    sleep 2
+  fi
+
+  if (( has_sys == 0 )); then
+    ensure_ollama_unit
+    if (( has_user == 0 )); then
+      wait_ollama 30 && ok "service started by systemd (user)" || true
+    fi
+  fi
+
   if ollama_up; then
     ok "server already answers at $OLLAMA_URL"
-  elif command -v systemctl >/dev/null && systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
+  elif command -v systemctl >/dev/null && (( has_sys )); then
     dim "restarting the system ollama service (sudo may ask for the password)"
     sudo systemctl restart ollama 2>&1 | tail -3
     if ! wait_ollama; then
@@ -451,6 +507,74 @@ ollama_restart_and_verify() {
   set_env TRADEAGENT_OLLAMA_MODEL "$model"
   ok "verified: $model -> $OLLAMA_ANS"
   ok "now: systemctl --user restart tradeagent-loop.service"
+  return 0
+}
+
+hardware() {
+  echo "--- machine ---"
+  local cpu cores mem virt=""
+  cpu="$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//')"
+  cores="$(nproc 2>/dev/null || echo '?')"
+  mem="$(awk '/^MemTotal/{printf "%.1f GB", $2/1048576}' /proc/meminfo 2>/dev/null)"
+  grep -qi 'hypervisor' /proc/cpuinfo 2>/dev/null && virt=", virtual machine"
+  echo "  cpu  : ${cpu:-unknown}"
+  echo "  cores: ${cores} threads${virt}"
+  echo "  ram  : ${mem:-unknown}"
+
+  echo "--- gpu ---"
+  local gpu_found=0
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    gpu_found=1
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null | sed 's/^/  nvidia : /'
+  fi
+  if command -v rocminfo >/dev/null 2>&1; then
+    gpu_found=1
+    rocminfo 2>/dev/null | grep -m1 'Marketing Name' | sed 's/^/  amd    : /'
+  fi
+  if command -v lspci >/dev/null 2>&1; then
+    lspci 2>/dev/null | grep -Ei 'vga|3d controller|display' | sed 's/^/  pci    : /'
+  fi
+  (( gpu_found )) || echo "  no nvidia/amd tool found on PATH"
+
+  echo "--- what ollama is using right now ---"
+  local ps
+  ps="$(curl -s --max-time 5 "$OLLAMA_URL/api/ps" 2>/dev/null)"
+  if [[ -z "$ps" ]]; then
+    warn "ollama is not reachable at $OLLAMA_URL - start it, then run this again"
+    return 1
+  fi
+  printf '%s' "$ps" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+ms = d.get("models") or d.get("model") or []
+if isinstance(ms, dict):
+    ms = [ms]
+if not ms:
+    print("  nothing is loaded in memory right now (the next call loads it)")
+for m in ms:
+    name = m.get("name") or m.get("model") or "?"
+    size = m.get("size") or 0
+    vram = m.get("size_vram") or 0
+    gb = lambda b: b / 1e9
+    if vram and size:
+        pct = 100.0 * vram / size
+        where = "GPU" if pct > 90 else ("GPU+CPU (split)" if pct > 5 else "CPU only")
+        print(f"  {name}: {gb(size):.1f} GB in use, {gb(vram):.1f} GB on the GPU -> {where}")
+    else:
+        print(f"  {name}: {gb(size):.1f} GB in use, 0 GB on the GPU -> CPU only")
+print()
+print("  processor column (ollama CLI):")
+' 2>/dev/null
+  if command -v ollama >/dev/null 2>&1; then
+    ollama ps 2>/dev/null | sed 's/^/    /'
+  fi
+  echo
+  echo "  note: 'CPU only' above means the model is computed on your processor with all"
+  echo "        threads and needs no GPU; if it feels slow, a smaller model is ~2x faster:"
+  echo "        ./scripts/setup_llm.sh --ollama qwen2.5:3b"
   return 0
 }
 
@@ -612,6 +736,7 @@ do_gemini() {
 
 case "${1:-}" in
   --status) status ;;
+  --hardware|--hw) hardware; exit $? ;;
   "") interactive ;;
 
   --gemini) shift; do_gemini "$@" ;;
