@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,39 @@ def mt5_candidate_paths() -> list[Path]:
                 ]
             )
     return guesses
+
+
+def _status_age(status: dict, root: Path) -> float | None:
+    """تازگی ضربان اکسپرت.
+
+    EA فیلد `age_s` را به‌ازای هر نماد می‌نویسد (نه سطح بالا)؛ پس اول سطح بالا،
+    بعد تازه‌ترین نماد، و در آخر mtime فایل status.json بررسی می‌شود.
+    """
+
+    def _num(value: Any) -> float | None:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return None
+        return num if num >= 0 else None
+
+    top = _num(status.get("age_s"))
+    if top is not None:
+        return top
+
+    ages: list[float] = []
+    for item in status.get("symbols") or []:
+        if isinstance(item, dict):
+            val = _num(item.get("age_s"))
+            if val is not None:
+                ages.append(val)
+    if ages:
+        return min(ages)
+
+    status_path = Path(root) / "status.json"
+    if status_path.exists():
+        return max(0.0, time.time() - status_path.stat().st_mtime)
+    return None
 
 
 def run_doctor(cfg: Config, network: bool = False) -> list[Check]:
@@ -115,9 +149,7 @@ def run_doctor(cfg: Config, network: bool = False) -> list[Check]:
             src = HarvesterSource(root)
             symbols = src.available_symbols()
             status = src.status()
-            age = None
-            if status.get("updated_ts"):
-                age = status.get("age_s")
+            age = _status_age(status, root)
             detail = f"{len(symbols)} نماد"
             if symbols:
                 detail += f" ({', '.join(symbols[:8])}{'…' if len(symbols) > 8 else ''})"

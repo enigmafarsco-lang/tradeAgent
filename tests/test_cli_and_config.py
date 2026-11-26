@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import REPO_ROOT
 
 from tradeagent.cli import main
 from tradeagent.config import Config
@@ -109,3 +110,58 @@ def test_cli_doctor_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     payload = json.loads(capsys.readouterr().out)
     assert "checks" in payload and "counts" in payload
     assert code in (0, 1)
+
+
+def test_doctor_reads_per_symbol_status_age(tmp_path):
+    """EA فیلد age_s را برای هر نماد می‌نویسد، نه سطح بالا؛ doctor باید بخواند."""
+    import json
+
+    from tradeagent.doctor import run_doctor
+
+    harv = tmp_path / "harvester"
+    (harv / "ticks" / "XAUUSD_i").mkdir(parents=True)
+    (harv / "symbols.json").write_text(
+        json.dumps({"symbols": [{"symbol": "XAUUSD_i"}]}), encoding="utf-8"
+    )
+    (harv / "status.json").write_text(
+        json.dumps(
+            {
+                "ea": "TickHarvester",
+                "updated_ts": "2026.11.26 13:00:00",
+                "symbols": [
+                    {"symbol": "XAUUSD_i", "age_s": 2, "ticks": 100},
+                    {"symbol": "EURUSD_i", "age_s": 3, "ticks": 50},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = Config.load(REPO_ROOT / "configs" / "default.toml", root=tmp_path)
+    cfg.set("data.source", "harvester")
+    cfg.set("data.harvester_dir", str(harv))
+    cfg.set("publish.enabled", False)
+    cfg.set("llm.enabled", False)
+    checks = run_doctor(cfg, network=False)
+    data_check = next(c for c in checks if "harvester" in c.name)
+    assert data_check.status == "ok", data_check.detail
+    assert "s پیش" in data_check.detail
+
+
+def test_doctor_flags_stale_heartbeat(tmp_path):
+    import json
+
+    from tradeagent.doctor import run_doctor
+
+    harv = tmp_path / "harvester"
+    (harv / "ticks").mkdir(parents=True)
+    (harv / "status.json").write_text(
+        json.dumps({"symbols": [{"symbol": "XAUUSD_i", "age_s": 9999}]}), encoding="utf-8"
+    )
+    cfg = Config.load(REPO_ROOT / "configs" / "default.toml", root=tmp_path)
+    cfg.set("data.source", "harvester")
+    cfg.set("data.harvester_dir", str(harv))
+    cfg.set("publish.enabled", False)
+    cfg.set("llm.enabled", False)
+    checks = run_doctor(cfg, network=False)
+    data_check = next(c for c in checks if "harvester" in c.name)
+    assert data_check.status == "warn"
