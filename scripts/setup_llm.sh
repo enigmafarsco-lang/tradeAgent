@@ -35,11 +35,20 @@ env_get() { grep -s "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | head -n1; }
 
 looks_like_placeholder() {
   local k="$1"
-  [[ ${#k} -lt 25 ]] && return 0
+  [[ -z "$k" ]] && return 0
+  # هر کاراکتر غیر ASCII (حروف فارسی، «…»، فاصله‌ی نامرئی) یعنی متن کپی‌شده از چت
+  if printf '%s' "$k" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then return 0; fi
   case "$k" in
-    *"..."*|*YOUR*|*your*|*xxx*|*XXX*|*EXAMPLE*|*placeholder*) return 0 ;;
+    *"..."*|*"…"*|*YOUR*|*your*|*xxx*|*XXX*|*EXAMPLE*|*placeholder*|*KEY*|*PASTE*) return 0 ;;
   esac
+  [[ ${#k} -lt 25 ]] && return 0
   return 1
+}
+
+script_version() {
+  local rev
+  rev="$(git -C "$ROOT" log -1 --format=%h -- scripts/setup_llm.sh 2>/dev/null || echo unknown)"
+  echo "$rev"
 }
 
 # 0=ok 1=bad key 2=network 3=unknown
@@ -61,6 +70,8 @@ gemini_probe() {
 ollama_up() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" | grep -q '"models"'; }
 
 status() {
+  echo "--- script ---"
+  echo "  version               : $(script_version)  (newest on origin: $(git -C "$ROOT" log -1 --format=%h origin/arena/e32ad3ff-tradeagent -- scripts/setup_llm.sh 2>/dev/null || echo '?'))"
   echo "--- .env ---"
   local k p
   k="$(env_get GEMINI_API_KEY)"
@@ -107,10 +118,21 @@ case "${1:-}" in
   --gemini)
     rc=0
     key="${2:-}"
-    [[ -n "$key" ]] || { bad "usage: --gemini <REAL_KEY>   (get one: https://aistudio.google.com/apikey)"; exit 2; }
+    if [[ -z "$key" ]]; then
+      printf '[llm] paste the key (it stays hidden, not in shell history): '
+      read -rs key
+      echo
+    fi
     if looks_like_placeholder "$key"; then
-      bad "that is a placeholder, not a key: '$key'"
-      echo "    get a free key at https://aistudio.google.com/apikey (Google AI Studio, no card)"
+      bad "that is not a usable key: '$key'"
+      if printf '%s' "$key" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then
+        echo "    it contains non-ASCII characters - this is text copied from the chat,"
+        echo "    not a real key. A real Gemini key is only A-Z a-z 0-9 _ - and starts with AIza."
+      else
+        echo "    a real Gemini key starts with AIza and is about 39 characters."
+        echo "    free key: https://aistudio.google.com/apikey"
+      fi
+      echo "    nothing written to .env"
       exit 2
     fi
     gemini_probe "$key"
@@ -120,15 +142,15 @@ case "${1:-}" in
          ok "key verified against $GEMINI_MODEL and stored in .env (600)"
          ok "restart: systemctl --user restart tradeagent-loop.service" ;;
       1) bad "the API rejected this key (400/403). Nothing written."; rc=1
-         echo "    - copy the key again without spaces; keys start with 'AIza' and are ~39 chars"
-         echo "    - make sure the Gemini API is enabled for that project" ;;
+         echo "    - copy the key again, no spaces; keys start with 'AIza' and are ~39 chars"
+         echo "    - the Generative Language API must be enabled for that project" ;;
       2) bad "cannot reach generativelanguage.googleapis.com from this machine."; rc=1
-         echo "    - check: curl -sS -o /dev/null -w '%{http_code}\\n' https://generativelanguage.googleapis.com"
+         echo "    - test it: curl -sS -o /dev/null -w '%{http_code}\\n' https://generativelanguage.googleapis.com"
          echo "    - behind a proxy? export https_proxy=http://127.0.0.1:PORT and retry"
-         echo "    - or use the local model instead: ./scripts/setup_llm.sh --install-ollama" ;;
+         echo "    - or use the local model: ./scripts/setup_llm.sh --install-ollama" ;;
       *) bad "unexpected answer from the API. Nothing written."; rc=1 ;;
     esac
-    exit "${rc:-0}" ;;
+    exit "$rc" ;;
 
   --install-ollama)
     if command -v ollama >/dev/null; then

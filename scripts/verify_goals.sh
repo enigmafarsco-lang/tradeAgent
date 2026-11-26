@@ -19,6 +19,10 @@ CONFIG="${VERIFY_CONFIG:-$ROOT/configs/local.toml}"
 MAX_REPORT_AGE=900
 [[ "${1:-}" == "--max-report-age" && -n "${2:-}" ]] && MAX_REPORT_AGE="$2"
 
+# نسخه‌ی همین کپی از ریپو: اگر قدیمی بود، جواب‌های عجیب مالِ کد قدیم است
+HEAD_SHA="$(git -C "$ROOT" log -1 --format='%h %s' 2>/dev/null | cut -c1-70)"
+printf '\033[1mREPO\033[0m    %s @ %s\n' "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)" "${HEAD_SHA:-unknown}"
+
 PASS=0; FAIL=0; WARN=0
 say()  { printf '%s\n' "$*"; }
 pass() { printf '\033[1;32m[PASS]\033[0m %s\n' "$*"; PASS=$((PASS+1)); }
