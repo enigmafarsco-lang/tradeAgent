@@ -88,6 +88,46 @@ cd tradeAgent
   `xvfb-run -a mt5` (نصب: `sudo apt install -y xvfb`). MT5 برای تیک‌گرفتن به پنجره
   نیاز ندارد، ولی **باید** یک چارت باز و اکسپرت روی آن فعال باشد.
 
+## خطای «A debugger has been found running in your system»
+
+این پیام از محافظ ضد-دیباگ خود متاتریدر می‌آید و با Wine یک **false positive**
+شناخته‌شده است (خصوصاً **Wine 11.0**؛ هم هنگام نصب `mt5setup.exe` و هم هنگام اجرا).
+
+ترتیب کار (کم‌هزینه → پرهزینه):
+
+```bash
+./scripts/fix_mt5_debugger.sh          # AeDebug + WINEDEBUG + wineserver
+```
+
+اسکریپت این کارها را می‌کند:
+
+1. `WINEDEBUG` را حذف و `wineserver -k` می‌کند (بعضی نصب‌کننده‌ها وجود این متغیر را
+   «دیباگر» می‌بینند).
+2. مقدار `Debugger`/`Auto` را از `HKLM\...\AeDebug` در هر دو نمای رجیستری پاک
+   می‌کند — Wine خودش `winedbg` را آنجا ثبت می‌کند و MT5 همان را می‌بیند.
+3. دیالوگ کرش Wine را خاموش می‌کند.
+
+اگر باز هم تکرار شد، مسئله نسخهٔ Wine است:
+
+```bash
+apt policy winehq-stable | head -12          # چه نسخه‌هایی موجود است؟
+```
+
+* نسخه‌ی **10.0** در فهرست بود → به آن برگرد و hold کن:
+  ```bash
+  sudo apt install winehq-stable=10.0.0.0~noble-1 wine-stable=10.0.0.0~noble-1 \
+       wine-stable-amd64=10.0.0.0~noble-1 wine-stable-i386=10.0.0.0~noble-1
+  sudo apt-mark hold winehq-stable wine-stable wine-stable-amd64 wine-stable-i386
+  ```
+* یا `winehq-devel` / `winehq-staging` (نسخه‌های ۱۱.۶+ که این مشکل در آن‌ها رفع شده)
+  را نصب کن و `wine --version` را چک کن.
+* اگر هیچ‌کدام جواب نداد: **VM ویندوزی** (VirtualBox/KVM) یا VPS ویندوزی برای MT5.
+  بقیهٔ زنجیره (پایتون، گزارش، ژورنال) روی لینوکس می‌ماند و پوشه‌ی `MQL5/Files`
+  با share/rsync منتقل می‌شود.
+
+منابع این تشخیص: گزارش‌های انجمن MQL5 دربارهٔ Wine 11 و MT5، و تجربهٔ پروژه‌های
+مشابه که با حذف مقدار `Debugger` از `AeDebug` یا برگشت به Wine 10 حل شده است.
+
 ## مسیر B — ویندوز واقعی یا VPS ویندوزی
 
 1. نصب‌کننده‌ی بروکر را نصب کن.
