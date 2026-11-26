@@ -7,6 +7,7 @@
 #   ./scripts/setup_llm.sh --gemini              ask for the key (hidden), verify, store
 #   ./scripts/setup_llm.sh --diagnose            show the provider's own answer, key masked
 #   ./scripts/setup_llm.sh --install-ollama      install ollama (sudo) + pull the model
+#   ./scripts/setup_llm.sh --repair-ollama       fix a half-finished install (llama-server missing)
 #   ./scripts/setup_llm.sh --ollama [model]      use an ollama that is already installed
 #   ./scripts/setup_llm.sh --off                 deterministic decisions only
 #
@@ -261,6 +262,7 @@ interactive() {
       return 0
     fi
     warn "provider is ollama but $om did not answer: ${OLLAMA_ERR:-unknown}"
+    hint_repair
   fi
 
   # ۱) گوگل
@@ -315,6 +317,7 @@ interactive() {
         return 0
       fi
       warn "no installed model answered"
+      hint_repair
       dim "installed: $(ollama_models | tr '\n' ' ')"
     fi
   fi
@@ -340,6 +343,88 @@ interactive() {
     return 1
   fi
   do_gemini "$typed"
+}
+
+ollama_lib_ok() {
+  local bin d
+  local candidates=("${OLLAMA_LIB_DIR:-}" /usr/local/lib/ollama /usr/lib/ollama /usr/local/ollama/lib)
+  bin="$(command -v ollama 2>/dev/null || true)"
+  [[ -n "$bin" ]] && candidates+=("$(cd "$(dirname "$bin")/.." 2>/dev/null && pwd)/lib/ollama")
+  for d in "${candidates[@]}"; do
+    [[ -n "$d" && -x "$d/llama-server" ]] && return 0
+  done
+  return 1
+}
+
+hint_repair() { case "${OLLAMA_ERR:-}" in *llama-server*binary*not\ found*) dim "this is a half-finished install, not a model problem: run ./scripts/setup_llm.sh --repair-ollama" ;; esac; }
+
+repair_ollama() {
+  local arch url tmp attempt
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) bad "unsupported architecture: $arch"; return 1 ;;
+  esac
+  url="https://github.com/ollama/ollama/releases/latest/download/ollama-linux-${arch}.tar.zst"
+  tmp="/tmp/ollama-linux-${arch}.tar.zst"
+
+  if ollama_lib_ok; then
+    ok "the llama-server runtime is already present - nothing to repair"
+    return 0
+  fi
+  warn "ollama is installed but its inference engine (llama-server) is missing."
+  warn "This is what an interrupted download leaves behind. Downloading again (~1.6 GB,"
+  warn "resumable: if the line drops, run this same command again)."
+
+  if [[ -n "${REPAIR_DRY_RUN:-}" ]]; then
+    dim "dry run: would download $url to $tmp, extract to /usr/local, restart, then test $DEFAULT_OLLAMA"
+    return 2
+  fi
+
+  for attempt in 1 2 3 4 5; do
+    curl -L --fail -C - --retry 5 --retry-all-errors --retry-delay 5 \
+         --connect-timeout 20 -o "$tmp" "$url" && break
+    warn "download interrupted (attempt $attempt) - resuming in 3s"
+    sleep 3
+    (( attempt == 5 )) && { bad "could not finish the download; run the command again later"; return 1; }
+  done
+  ok "downloaded $(du -h "$tmp" 2>/dev/null | cut -f1) to $tmp"
+
+  if command -v zstd >/dev/null; then
+    zstd -t "$tmp" >/dev/null 2>&1 || { bad "archive is incomplete - delete $tmp and retry"; return 1; }
+    sudo tar --zstd -xf "$tmp" -C /usr/local || { bad "extraction failed"; return 1; }
+  else
+    warn "zstd is not installed; falling back to the official installer"
+    curl -fsSL https://ollama.com/install.sh | sh || { bad "official installer failed"; return 1; }
+  fi
+
+  ollama_lib_ok || { bad "extraction finished but llama-server is still missing"; return 1; }
+  ok "inference engine installed: $(ollama_lib_ok && echo ok)"
+
+  if command -v systemctl >/dev/null && systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
+    sudo systemctl restart ollama 2>/dev/null && ok "restarted the ollama service"
+  else
+    pkill -f 'ollama serve' 2>/dev/null
+    sleep 1
+    (nohup ollama serve >/tmp/ollama.log 2>&1 &)
+    sleep 3
+  fi
+  ollama_up || { bad "server is still not up; see /tmp/ollama.log"; return 1; }
+
+  local model="${1:-$DEFAULT_OLLAMA}"
+  ollama_models | grep -qx "$model" || ollama pull "$model" || return 1
+  ollama_probe "$model"
+  if [[ $? -eq 0 ]]; then
+    set_env TRADEAGENT_LLM_PROVIDER ollama
+    set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
+    set_env TRADEAGENT_OLLAMA_MODEL "$model"
+    ok "repaired and verified: $model -> $OLLAMA_ANS"
+    ok "now: systemctl --user restart tradeagent-loop.service"
+    return 0
+  fi
+  bad "runtime is installed but the model still fails: ${OLLAMA_ERR:-unknown}"
+  return 1
 }
 
 script_version() {
@@ -440,7 +525,7 @@ status() {
     local cur; cur="$(env_get TRADEAGENT_OLLAMA_MODEL)"; cur="${cur:-$DEFAULT_OLLAMA}"
     ollama_probe "$cur"
     if [[ $? -eq 0 ]]; then ok "model $cur answers: $OLLAMA_ANS"
-    else warn "model $cur did not answer: ${OLLAMA_ERR:-unknown}"; fi
+    else warn "model $cur did not answer: ${OLLAMA_ERR:-unknown}"; hint_repair; fi
   else warn "server: not reachable at $OLLAMA_URL"; fi
   echo
   echo "without either, cycles still run - decisions stay deterministic."
@@ -526,6 +611,12 @@ print("available   :", ", ".join(ms[:8]))
     fi
     ;;
 
+  --repair-ollama)
+    shift
+    repair_ollama "${1:-}"
+    exit $?
+    ;;
+
   --install-ollama)
     if ! command -v ollama >/dev/null; then
       warn "downloads ~1.6 GB and installs a system service (sudo password will be asked)"
@@ -534,7 +625,13 @@ print("available   :", ", ".join(ms[:8]))
       curl -fsSL https://ollama.com/install.sh | sh || { bad "install failed (network?)"; exit 1; }
       command -v ollama >/dev/null || { bad "installed but not on PATH"; exit 1; }
       ok "ollama installed"
-    else ok "ollama already installed: $(command -v ollama)"; fi
+    elif ollama_lib_ok; then
+      ok "ollama already installed: $(command -v ollama)"
+    else
+      warn "ollama binary exists but its runtime is missing (interrupted install) - repairing"
+      repair_ollama "$DEFAULT_OLLAMA"
+      exit $?
+    fi
     ollama_up || { warn "starting server"; (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
     ollama_up || { bad "server still down; see /tmp/ollama.log"; exit 1; }
     curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$DEFAULT_OLLAMA\"" || ollama pull "$DEFAULT_OLLAMA" || exit 1
