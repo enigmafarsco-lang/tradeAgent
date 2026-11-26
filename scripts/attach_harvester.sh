@@ -43,29 +43,34 @@ done
 
 # ---------------------------------------------------------------------------
 # ۱) انتخاب ترمینال
-# دو چیدمان ممکن است:
-#   الف) AppData/Roaming/MetaQuotes/Terminal/<HASH>/MQL5   (حالت عادی)
-#   ب) <نصب MT5>/MQL5                                      (حالت portable)
-# همه‌ی پوشه‌های MQL5 را پیدا می‌کنیم و بهترین را برمی‌گزینیم.
-find_mql5_dirs() {
+# پوشه‌ی داده‌ی MT5 = پوشه‌ای که config/ و bases/ دارد (مثلاً
+# AppData/Roaming/MetaQuotes/Terminal/<HASH>) یا در حالت portable = پوشه‌ی نصب.
+# MQL5 ممکن است هنوز ساخته نشده باشد؛ ما می‌سازیمش.
+find_data_dirs() {
   local roots=("$PREFIX/drive_c" "${HOME}/.wine/drive_c" "/mnt/c/Users")
   local r d
   for r in "${roots[@]}"; do
     [[ -d "$r" ]] || continue
-    while IFS= read -r -d '' d; do printf '%s\n' "$d"; done \
-      < <(find "$r" -maxdepth 12 -type d -name MQL5 -print0 2>/dev/null)
+    while IFS= read -r -d '' d; do
+      # فقط پوشه‌ی ترمینال (دارای config یا bases یا MQL5)
+      if [[ -d "$d/config" || -d "$d/bases" || -d "$d/MQL5" ]]; then printf '%s\n' "$d"; fi
+    done < <(find "$r" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*' -print0 2>/dev/null)
+    # حالت portable: پوشه‌ی نصب کنار terminal64.exe
+    while IFS= read -r -d '' d; do
+      printf '%s\n' "$(dirname "$d")"
+    done < <(find "$r" -maxdepth 8 -type f -iname 'terminal64.exe' -print0 2>/dev/null)
   done | sort -u
 }
 
 score_dir() {
   local d="$1" score=0 btc
-  [[ -f "$d/Files/harvester/status.json" ]] && score=$((score + 4))
-  [[ -d "$d/Files/ticks" ]] && score=$((score + 2))
-  btc=$(find "$d/../bases" -maxdepth 4 -type d -iname '*BTC*' 2>/dev/null | head -n1)
-  [[ -n "$btc" ]] && score=$((score + 2))
-  [[ -d "$d/Logs" ]] && [[ -n "$(find "$d/Logs" -maxdepth 1 -type f -newermt '-2 days' 2>/dev/null | head -n1)" ]] && score=$((score + 1))
-  # MQL5 کنار terminal64.exe = portable = داده‌ی همان ترمینال
-  [[ -f "$d/../terminal64.exe" ]] && score=$((score + 1))
+  [[ -d "$d/bases" ]] && score=$((score + 3))
+  [[ -d "$d/MQL5" ]] && score=$((score + 1))
+  [[ -d "$d/MQL5/Files/harvester" ]] && score=$((score + 4))
+  [[ -f "$d/MQL5/Files/harvester/status.json" ]] && score=$((score + 4))
+  [[ -d "$d/config" ]] && score=$((score + 2))
+  btc=$(find "$d/bases" -maxdepth 3 -type d -iname '*XAU*' -o -maxdepth 3 -type d -iname '*BTC*' 2>/dev/null | head -n1)
+  [[ -n "$btc" ]] && score=$((score + 1))
   printf '%s' "$score"
 }
 
@@ -75,34 +80,36 @@ pick_data_dir() {
     [[ -n "$d" && -d "$d" ]] || continue
     sc="$(score_dir "$d")"
     if [[ "$sc" -gt "$best_score" ]]; then best="$d"; best_score="$sc"; fi
-  done < <(find_mql5_dirs)
+  done < <(find_data_dirs)
   printf '%s' "$best"
 }
 
 if [[ -n "$DATA_ARG" ]]; then
-  DATA_DIR="$DATA_ARG"
-  [[ "${DATA_DIR##*/}" == "Files" ]] && DATA_DIR="$(dirname "$DATA_DIR")"
+  DATA_ROOT="$DATA_ARG"
+  # اگر کاربر مسیر MQL5 یا MQL5/Files داد، به پوشه‌ی داده برگردان
+  [[ "${DATA_ROOT##*/}" == "Files" ]] && DATA_ROOT="$(dirname "$(dirname "$DATA_ROOT")")"
+  [[ "${DATA_ROOT##*/}" == "MQL5" ]] && DATA_ROOT="$(dirname "$DATA_ROOT")"
 else
-  log "جست‌وجوی ترمینال‌های MT5 (prefix، ~/.wine) ..."
-  while IFS= read -r d; do log "   کاندید: $d  (امتیاز $(score_dir "$d"))"; done < <(find_mql5_dirs)
-  DATA_DIR="$(pick_data_dir)"
+  log "جست‌وجوی پوشه‌ی داده‌ی MT5 (config/bases/terminal64.exe) ..."
+  while IFS= read -r d; do log "   کاندید: $d  (امتیاز $(score_dir "$d"))"; done < <(find_data_dirs)
+  DATA_ROOT="$(pick_data_dir)"
 fi
 
-if [[ -z "$DATA_DIR" || ! -d "$DATA_DIR" ]]; then
-  warn "هیچ MQL5 پیدا نشد."
-  echo "  WINEPREFIX=$PREFIX"
-  find "$HOME" -maxdepth 14 -type d -name MQL5 2>/dev/null | sed 's/^/    /'
-  die "مسیر را دستی بده: --data-dir \"<...>/MQL5\""
+if [[ -z "$DATA_ROOT" || ! -d "$DATA_ROOT" ]]; then
+  warn "هیچ پوشه‌ی داده‌ای پیدا نشد."
+  find "$HOME" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*' 2>/dev/null | sed 's/^/    /'
+  die "مسیر را دستی بده: --data-dir \"<...>/MetaQuotes/Terminal/<HASH>\""
 fi
-ok "داده‌ی ترمینال: $DATA_DIR"
+DATA_DIR="$DATA_ROOT/MQL5"
+mkdir -p "$DATA_DIR" 2>/dev/null || true
+ok "پوشه‌ی داده: $DATA_ROOT"
+ok "MQL5       : $DATA_DIR"
 
-[[ "${DATA_DIR##*/}" == "Files" ]] && DATA_DIR="$(dirname "$DATA_DIR")"
 EXPERTS="$DATA_DIR/Experts"
 FILES="$DATA_DIR/Files"
 PRESETS="$DATA_DIR/Presets"
 mkdir -p "$EXPERTS" "$FILES/harvester" "$PRESETS" "$OUT_DIR" 2>/dev/null || true
 
-# ---------------------------------------------------------------------------
 # ۲) کپی اکسپرت
 if [[ $DRY -eq 1 ]]; then
   echo "   + cp $EA_SRC $EXPERTS/TickHarvester.mq5"
