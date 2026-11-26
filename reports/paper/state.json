@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "updated_ts": "2026-11-26T13:31:20Z",
+  "cycle": 2,
+  "balance": 9998.0057,
+  "equity": 9955.6357,
+  "peak_equity": 10000.0,
+  "drawdown_pct": 0.444,
+  "starting_balance": 10000.0,
+  "streak_wins": 0,
+  "streak_losses": 0,
+  "open_positions": 2,
+  "overall_stats": {
+    "trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0.0,
+    "net_pnl": 0.0,
+    "avg_bps": 0.0,
+    "avg_r": 0.0
+  },
+  "today_stats": {
+    "trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0.0,
+    "net_pnl": 0.0,
+    "avg_bps": 0.0,
+    "avg_r": 0.0
+  },
+  "policy": {
+    "variant": "momentum",
+    "level": 0,
+    "version": 1,
+    "source": "baseline"
+  },
+  "day": "2026-11-26"
+}

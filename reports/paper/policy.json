@@ -1,0 +1,45 @@
+{
+  "active": {
+    "variant": "momentum",
+    "params": {
+      "lookback_s": 300,
+      "breakout_k": 1.0,
+      "sl_atr": 1.3,
+      "rr": 1.6,
+      "hold_s": 900,
+      "min_edge_bps": 2.0,
+      "max_spread_bps": 6.0,
+      "cooldown_s": 300,
+      "z_entry": 1.8,
+      "max_vol_bps": 90.0
+    },
+    "level": 0,
+    "generation": 0,
+    "version": 1,
+    "source": "baseline",
+    "reason": "",
+    "risk_scale": 1.0
+  },
+  "next": {
+    "variant": "momentum",
+    "params": {
+      "lookback_s": 300,
+      "breakout_k": 1.0,
+      "sl_atr": 1.3,
+      "rr": 1.6,
+      "hold_s": 900,
+      "min_edge_bps": 2.0,
+      "max_spread_bps": 6.0,
+      "cooldown_s": 300,
+      "z_entry": 1.8,
+      "max_vol_bps": 90.0
+    },
+    "level": 0,
+    "generation": 0,
+    "version": 1,
+    "source": "baseline",
+    "reason": "",
+    "risk_scale": 1.0
+  },
+  "ts": "2026-11-26T13:31:20Z"
+}
