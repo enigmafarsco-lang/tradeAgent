@@ -150,7 +150,7 @@ src/tradeagent/
   publish.py    کلون جدا، کامیت و پوش فقط فایل‌های گزارش
   loop.py       چرخه‌ی ۵ دقیقه‌ای و حلقه‌ی مقاوم به خطا
   cli.py        init / doctor / demo / cycle / loop / status / report
-scripts/        نصب MT5 روی Wine، کامپایل اکسپرت، پیدا کردن پوشه‌ی داده
+scripts/        نصب MT5 روی Wine، کامپایل اکسپرت، پیدا کردن پوشه‌ی داده، بسته‌ی آفلاین
 deploy/         systemd unit + نمونه‌ی cron
 tests/          تست‌های کاملاً آفلاین (بدون MT5 و بدون اینترنت)
 docs/           راهنمای فارسی نصب، جریان داده، سیاست، انتشار، اجرا
@@ -166,6 +166,7 @@ docs/           راهنمای فارسی نصب، جریان داده، سیا�
 | [docs/AI-LOOP-FA.md](docs/AI-LOOP-FA.md) | چرخه‌ی ۵ دقیقه، استراتژی‌ها، نردبان، مدل، محدودیت‌ها |
 | [docs/PUBLISH-FA.md](docs/PUBLISH-FA.md) | راه‌اندازی شاخه‌ی گزارش، احراز هویت گیت، خواندن گزارش |
 | [docs/RUNBOOK-FA.md](docs/RUNBOOK-FA.md) | اجرا، پایش، عیب‌یابی، چک‌لیست ایمنی |
+| [docs/NETWORK-FA.md](docs/NETWORK-FA.md) | وقتی GitHub/PyPI/یک مخزن باز نمی‌شود: پروکسی، SSH روی ۴۴۳، نصب آفلاین |
 | [docs/PLAN-FA.md](docs/PLAN-FA.md) | نقشه‌ی راه و نسبت این پروژه با `trade-mcp` |
 
 ## تست
