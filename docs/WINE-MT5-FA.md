@@ -172,6 +172,31 @@ chmod +x ~/Downloads/mt5linux.sh
 منابع این تشخیص: گزارش‌های انجمن MQL5 دربارهٔ Wine 11 و MT5، و تجربهٔ پروژه‌های
 مشابه که با حذف مقدار `Debugger` از `AeDebug` یا برگشت به Wine 10 حل شده است.
 
+## ترمینال نصب شد ولی پنجره‌ای نمی‌آید
+
+MT5 ممکن است بالا بیاید ولی پنجره‌اش رسم نشود (خصوصاً روی Wayland یا اگر
+ترمینال از SSH اجرا شده باشد). تشخیص:
+
+```bash
+pgrep -af terminal64 || echo "NOT RUNNING"
+echo "DISPLAY=$DISPLAY WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+```
+
+اگر فرآیند هست ولی پنجره نه، داخل دسکتاپ مجازی Wine اجرا کن:
+
+```bash
+MT5_DESKTOP=1 mt5                      # لانچری که install_mt5_wine.sh می‌سازد
+# یا دستی:
+wine explorer /desktop=mt5,1400x900 "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+```
+
+اگر فرآیند هم نیست، خروجی خطا را بگیر:
+
+```bash
+export WINEPREFIX="$HOME/Wine" WINEARCH=win64
+wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" 2>&1 | tail -40; echo "exit=${PIPESTATUS[0]}"
+```
+
 ## مسیر B — ویندوز واقعی یا VPS ویندوزی
 
 1. نصب‌کننده‌ی بروکر را نصب کن.

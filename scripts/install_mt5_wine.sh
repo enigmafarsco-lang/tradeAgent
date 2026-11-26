@@ -198,9 +198,16 @@ if [[ -n "$TERMINAL" ]]; then
   if [[ $DRY_RUN -eq 0 ]]; then
     cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
+# MT5 → Wine. اگر پنجره نیامد/جای عجیبی باز شد:
+#   MT5_DESKTOP=1 mt5
 export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
-exec wine "$TERMINAL" "\$@"
+TERM_EXE="$TERMINAL"
+if [[ "\${MT5_DESKTOP:-0}" == "1" ]]; then
+  GEOM="\${MT5_DESKTOP_GEOM:-1400x900}"
+  exec wine explorer "/desktop=mt5,\${GEOM}" "\$TERM_EXE" "\$@"
+fi
+exec wine "\$TERM_EXE" "\$@"
 EOF
     chmod +x "$LAUNCHER"
     log "لانچر ساخته شد: $LAUNCHER"
