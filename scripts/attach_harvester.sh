@@ -192,8 +192,14 @@ if [[ -z "$SYMBOL" ]]; then
     done
   fi
 fi
+# اگر تاریخچه‌ای نبود، از فهرست Market Watch ترمینال (symbols.sel) بخوان
 if [[ -z "$SYMBOL" ]]; then
-  warn "نمادی در bases پیدا نشد؛ EURUSD می‌گذارم (فقط برای باز شدن چارت)."
+  for cand in XAUUSD BTCUSD XBTUSD ETHUSD XAGUSD US30 EURUSD; do
+    if strings "$DATA_DIR/../bases"/*/symbols.sel 2>/dev/null | grep -qx -- "$cand"; then SYMBOL="$cand"; break; fi
+  done
+fi
+if [[ -z "$SYMBOL" ]]; then
+  warn "هیچ نمادی در ترمینال پیدا نشد (حساب لاگین نشده؟). EURUSD می‌گذارم."
   SYMBOL="EURUSD"
 fi
 ok "نماد چارت: $SYMBOL"
