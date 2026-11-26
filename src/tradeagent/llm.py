@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -23,6 +24,19 @@ from .config import Config
 from .util import LOG, read_json, utc_iso, write_json
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+
+_SUGGEST_RE = re.compile(r"models/([A-Za-z0-9._-]{3,})")
+
+
+def suggested_model(error_body: str) -> str | None:
+    """مدلی که خودِ گوگل در پیام خطا پیشنهاد می‌کند (مثلاً وقتی مدلی بازنشسته شده)."""
+    text = error_body or ""
+    if "no longer available" not in text.lower() and "use models/" not in text.lower():
+        return None
+    for name in _SUGGEST_RE.findall(text):
+        if not name.startswith("gemini-2.5"):
+            return name
+    return None
 
 SYSTEM_PROMPT = """تو یک مشاور ریسک برای یک سیستم معامله‌ی کاغذی (paper trading) هستی.
 فقط JSON معتبر برگردان، بدون متن اضافه. ساختار مجاز:
@@ -133,14 +147,40 @@ class LLMAdvisor:
                 "responseMimeType": "application/json",
             },
         }
-        data = self.transport(url, payload, {}, self.timeout)
+        try:
+            data = self.transport(url, payload, {}, self.timeout)
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - خواندن پیام خطا اختیاری است
+                body = ""
+            new_model = suggested_model(body)
+            if exc.code == 404 and new_model and new_model != self.model:
+                LOG.warning(
+                    "مدل %s در دسترس نیست؛ گوگل %s را پیشنهاد داد - همان را امتحان می‌کنم",
+                    self.model, new_model,
+                )
+                self.model = new_model
+                url = GEMINI_URL.format(model=self.model, key=key)
+                data = self.transport(url, payload, {}, self.timeout)
+                extra_model = self.model
+            else:
+                if body:
+                    exc.args = (*exc.args, body[:400])
+                raise
+        else:
+            extra_model = None
         text = ""
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError):
             text = json.dumps(data, ensure_ascii=False)[:800]
         usage = data.get("usageMetadata", {}) if isinstance(data, dict) else {}
-        return text, {"usage": usage}
+        meta: dict[str, Any] = {"usage": usage}
+        if extra_model:
+            meta["model_switched_to"] = extra_model
+        return text, meta
 
     def _call_ollama(self, prompt: str) -> tuple[str, dict[str, Any]]:
         url = f"{self.ollama_url}/api/chat"

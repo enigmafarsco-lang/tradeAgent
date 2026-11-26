@@ -110,3 +110,37 @@ def test_strip_code_fence() -> None:
     assert _strip_code_fence('```json\n{"a":1}\n```') == '{"a":1}'
     assert _strip_code_fence('prefix {"a":1} suffix') == '{"a":1}'
     assert _strip_code_fence("no braces") == "no braces"
+
+
+def test_gemini_switches_to_the_model_google_suggests(gemini_cfg: Config, tmp_path: Path) -> None:
+    """مدل بازنشسته‌شده: گوگل ۴۰۴ می‌دهد و جانشین را نام می‌برد → همان را بردار."""
+    import io
+    import urllib.error
+
+    urls: list[str] = []
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        urls.append(url)
+        if "gemini-2.5-flash" in url:
+            body = (b'{"error":{"code":404,"message":"This model models/gemini-2.5-flash is no '
+                    b'longer available to new users. Please update your code to use models/gemini-3.8-flash"}}')
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(body))
+        return {"candidates": [{"content": {"parts": [{"text": '{"variant":"momentum","params":{},"reason":"ok","confidence":0.6}'}]}}]}
+
+    advisor = LLMAdvisor(gemini_cfg, tmp_path / "calls.json", transport=transport)
+    result = advisor.consult({"cycle": 5})
+    assert result.proposal is not None, result.meta
+    assert result.meta.get("model_switched_to") == "gemini-3.8-flash"
+    assert advisor.model == "gemini-3.8-flash"
+    assert "gemini-3.8-flash" in urls[-1]
+
+
+def test_suggested_model_ignores_unrelated_errors() -> None:
+    from tradeagent.llm import suggested_model
+
+    assert suggested_model("API key not valid. Please pass a valid API key.") is None
+    assert suggested_model("") is None
+    assert suggested_model(
+        "This model models/gemini-2.5-flash is no longer available to new users. "
+        "Please update your code to use models/gemini-3.8-flash"
+    ) == "gemini-3.8-flash"

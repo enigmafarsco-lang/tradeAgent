@@ -110,11 +110,37 @@ explain() {   # پیام انسانی از پاسخ گوگل
   return 0
 }
 
+# مدل‌های مجاز برای این کلید، بهترین اول: فلشِ جدیدترین نسخه، بعد بقیه
+gemini_candidates() {
+  printf '%s' "$BODY" | python3 -c '
+import json,sys,re
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+want=sys.argv[1]
+ms=[m["name"].split("/")[-1] for m in d.get("models",[])
+    if "generateContent" in m.get("supportedGenerationMethods",[])]
+def ver(n):
+    m=re.search(r"gemini-(\d+(?:\.\d+)?)", n)
+    return float(m.group(1)) if m else 0.0
+out=[]
+if want in ms: out.append(want)
+flash=sorted([n for n in ms if "flash" in n], key=ver, reverse=True)
+rest=sorted([n for n in ms if n not in flash], key=ver, reverse=True)
+for n in flash+rest:
+    if n not in out: out.append(n)
+print("\n".join(out))
+' "$PREFERRED_GEMINI" 2>/dev/null
+}
+
 # 0 = works (sets GEMINI_MODEL_OK), 1 = key rejected, 2 = network, 3 = other
 gemini_probe() {
-  local key="$1"
+  local key="$1" seq=() i=0
   GEMINI_MODEL_OK=""
-  if [[ -n "${GEMINI_PROBE_MOCK:-}" ]]; then      # تست آفلاین
+  if [[ -n "${GEMINI_GEN_SEQ:-}" ]]; then
+    IFS=';' read -r -a seq <<< "${GEMINI_GEN_SEQ//;;/;}"
+  fi
+
+  if [[ -n "${GEMINI_PROBE_MOCK:-}" ]]; then
     CODE="${GEMINI_PROBE_MOCK%%|*}"; BODY="${GEMINI_PROBE_MOCK#*|}"
   else
     http_get "$API_BASE/models?key=$key"
@@ -124,27 +150,41 @@ gemini_probe() {
     [[ "$CODE" =~ ^4 ]] && return 1
     return 3
   fi
-  local model
-  model="$(printf '%s' "$BODY" | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit()
-want=sys.argv[1]
-names=[m["name"].split("/")[-1] for m in d.get("models",[])
-       if "generateContent" in m.get("supportedGenerationMethods",[])]
-best=[n for n in names if n==want] or [n for n in names if n.startswith(want.split("-")[0])] or names
-print(best[0] if best else "")
-' "$PREFERRED_GEMINI" 2>/dev/null)"
-  [[ -z "$model" ]] && { BODY='{"error":{"message":"models list had no generateContent model"}}'; return 3; }
-  if [[ -n "${GEMINI_GEN_MOCK:-}" ]]; then
-    CODE="${GEMINI_GEN_MOCK%%|*}"; BODY="${GEMINI_GEN_MOCK#*|}"
-  else
-    http_post "$API_BASE/models/$model:generateContent?key=$key" \
-      '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
-  fi
-  [[ "${CODE:-000}" == "200" ]] || { [[ "${CODE:-000}" == "000" ]] && return 2; return 1; }
-  GEMINI_MODEL_OK="$model"
-  return 0
+
+  local cands; cands="$(gemini_candidates)"
+  [[ -z "$cands" ]] && { BODY='{"error":{"message":"no generateContent model for this key"}}'; return 3; }
+
+  local queue model sug
+  queue="$(echo $cands)"
+  local guard=0
+  while [[ -n "$queue" && $guard -lt 6 ]]; do
+    guard=$((guard + 1))
+    model="${queue%% *}"
+    queue="${queue#"$model"}"; queue="${queue# }"
+    [[ "$model" == "${GEMINI_MODEL_TRIED:-}" ]] && continue
+    if [[ ${#seq[@]} -gt 0 && $i -lt ${#seq[@]} ]]; then
+      CODE="${seq[$i]%%|*}"; BODY="${seq[$i]#*|}"; i=$((i+1))
+    elif [[ -n "${GEMINI_GEN_MOCK:-}" ]]; then
+      CODE="${GEMINI_GEN_MOCK%%|*}"; BODY="${GEMINI_GEN_MOCK#*|}"
+    else
+      http_post "$API_BASE/models/$model:generateContent?key=$key" \
+        '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
+    fi
+    if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
+    [[ "${CODE:-000}" == "000" ]] && return 2
+    dim "model $model -> http ${CODE:-000}"
+    # اگر گوگل جانشین معرفی کرد، همان اول صف بیاید
+    sug="$(python3 -c '
+import re,sys
+t=sys.stdin.read()
+if "no longer available" in t.lower() or "use models/" in t.lower():
+    for n in re.findall(r"models/([A-Za-z0-9._-]{3,})", t):
+        if not n.startswith("gemini-2.5"): print(n); break
+' <<< "$BODY")"
+    [[ -n "$sug" ]] && queue="$sug $queue"
+    [[ "${CODE:-000}" == "400" || "${CODE:-000}" == "403" ]] && break
+  done
+  return 1
 }
 
 report_failure() {
