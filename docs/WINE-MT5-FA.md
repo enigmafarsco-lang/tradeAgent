@@ -197,6 +197,22 @@ export WINEPREFIX="$HOME/Wine" WINEARCH=win64
 wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" 2>&1 | tail -40; echo "exit=${PIPESTATUS[0]}"
 ```
 
+## حالت portable: داده کنار `terminal64.exe` است
+
+اگر در پروفایل ترمینال فایل `portable.txt` دیدی، متاتریدر در حالت portable اجرا
+می‌شود و `MQL5/`، `bases/` و `config/` را **کنار `terminal64.exe`** می‌نویسد، نه در
+`AppData/Roaming/MetaQuotes/Terminal/<HASH>`. در این حالت هر جست‌وجویی در AppData
+خالی است و «حساب لاگین نیست» به‌اشتباه گزارش می‌شود.
+
+مطمئن‌ترین راه پیدا کردن مسیر واقعی، از داخل خود متاتریدر است:
+`File -> Open Data Folder` — پنجره‌ای که باز می‌شود همان پوشه‌ی داده است.
+اکسپرت باید در `<آن پوشه>/MQL5/Experts` باشد و خروجی تیک در
+`<آن پوشه>/MQL5/Files/harvester`.
+
+خاموش‌کردن portable (اختیاری، پروفایل را عوض می‌کند):
+`rm "$PREFIX/drive_c/.../portable.txt"` و بعد باز کردن دوباره‌ی ترمینال — ولی اگر
+لاگین/چارت‌های فعلی در پوشه‌ی نصب‌اند، این کار آن‌ها را از دید ترمینال خارج می‌کند.
+
 ## مسیر B — ویندوز واقعی یا VPS ویندوزی
 
 1. نصب‌کننده‌ی بروکر را نصب کن.
