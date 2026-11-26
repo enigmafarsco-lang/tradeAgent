@@ -76,6 +76,13 @@ def test_markdown_has_all_sections() -> None:
     assert "کاغذی" in md
 
 
+def test_synthetic_source_is_flagged_in_report() -> None:
+    md = render_markdown(make_result(source="synthetic"))
+    assert "ساختگی" in md
+    real = render_markdown(make_result(source="harvester"))
+    assert "ساختگی" not in real
+
+
 def test_agent_checklist_flags_stale_and_drawdown() -> None:
     result = make_result()
     items = agent_checklist(result)

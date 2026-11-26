@@ -86,6 +86,12 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
         f"حالت: **کاغذی** (هیچ سفارش واقعی ارسال نمی‌شود) · نسخه {__version__}"
     )
     lines.append("")
+    if str(result.source) == "synthetic":
+        lines.append(
+            "> ⚠️ **دادهٔ ساختگی (synthetic) است، نه بازار واقعی.** این اعداد فقط برای "
+            "آزمودن مسیر سیستم‌اند و هیچ معنای آماری/سوددهی ندارند."
+        )
+        lines.append("")
 
     # ۱) خلاصه
     lines.append("## ۱) خلاصه")

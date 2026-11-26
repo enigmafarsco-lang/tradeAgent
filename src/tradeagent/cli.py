@@ -149,7 +149,11 @@ def cmd_demo(cfg: Config, args: argparse.Namespace) -> int:
             f"بسته={compact['trades_closed_cycle']} | {compact['variant']}@L{compact['level']}"
         )
     report = demo_root / "reports" / "latest.md"
-    print(f"\nگزارش نمونه: {report}")
+    print(
+        "\n⚠️  این دمو با دادهٔ ساختگی اجرا شد؛ سود/زیان‌اش واقعی نیست و فقط "
+        "سلامت مسیر داده→استراتژی→گزارش را نشان می‌دهد."
+    )
+    print(f"گزارش نمونه: {report}")
     print(f"ژورنال: {demo_root / 'paper.sqlite3'}")
     if not args.keep:
         print("(برای نگه‌داشتن این نمونه همان‌جا بماند؛ پوشه در var/demo است)")
