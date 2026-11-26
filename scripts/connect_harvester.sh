@@ -18,18 +18,27 @@ die()  { printf '\033[1;31m[connect]\033[0m %s\n' "$*" >&2; exit 1; }
 # وقتی چند ترمینال در Wine هست (مثلاً MetaQuotes-Demo و Alpari)، درست‌ترین را
 # انتخاب کن: آن‌که harvester/status.json دارد، یا در bases نماد BTC دارد،
 # یا لاگ‌هایش تازه‌تر است. اگر هیچ‌کدام، جدیدترین MQL5.
+score_files_dir() {
+  local dir="$1" mql score=0 syms
+  mql="$(dirname "$dir")"
+  if [[ -f "$dir/harvester/status.json" ]]; then
+    score=$((score + 3))
+    [[ -n "$(find "$dir/harvester/status.json" -newermt '-10 minutes' 2>/dev/null)" ]] && score=$((score + 10))
+  fi
+  [[ -d "$dir/harvester/ticks" ]] && score=$((score + 2))
+  [[ -n "$(find "$mql/../bases" -maxdepth 4 -type d -path '*/history/*' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
+  [[ -f "$mql/../terminal64.exe" ]] && score=$((score + 1))
+  [[ -n "$(find "$mql/../logs" -maxdepth 1 -type f -newermt '-30 minutes' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
+  printf '%s' "$score"
+}
+
 pick_files_dir() {
-  local best="" best_score=-1 dir mql score btc
+  local best="" best_score=-1 dir score
   while IFS= read -r dir; do
     [[ -n "$dir" && -d "$dir" ]] || continue
-    mql="$(dirname "$dir")"
-    score=0
-    [[ -f "$dir/harvester/status.json" ]] && score=$((score + 3))
-    btc=$(find "$mql/../bases" -maxdepth 4 -type d -iname '*BTC*' 2>/dev/null | head -n1)
-    [[ -n "$btc" ]] && score=$((score + 2))
-    [[ -d "$mql/Logs" ]] && [[ -n "$(find "$mql/Logs" -maxdepth 1 -type f -newermt '-2 days' 2>/dev/null | head -n1)" ]] && score=$((score + 1))
-    [[ "$score" -gt "$best_score" ]] && { best="$dir"; best_score="$score"; }
-  done < <(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null)
+    score="$(score_files_dir "$dir")"
+    if [[ "$score" -gt "$best_score" ]]; then best="$dir"; best_score="$score"; fi
+  done < <(find "$PREFIX/drive_c" -maxdepth 10 -type d -path '*MQL5/Files' 2>/dev/null)
   printf '%s' "$best"
 }
 
@@ -38,7 +47,7 @@ if [[ -z "$FILES" ]]; then
   log "scanning for MQL5/Files in $PREFIX ..."
   ALL="$(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null || true)"
   if [[ -n "$ALL" ]]; then
-    while IFS= read -r d; do log "   candidate: $d"; done <<< "$ALL"
+    while IFS= read -r d; do log "   candidate: $d  (score $(score_files_dir "$d"))"; done <<< "$ALL"
   fi
   FILES="$(pick_files_dir)"
   [[ -n "$FILES" ]] && log "selected: $FILES"
