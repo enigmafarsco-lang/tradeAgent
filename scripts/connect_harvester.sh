@@ -15,10 +15,33 @@ log()  { printf '\033[1;34m[connect]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[connect]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[connect]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# وقتی چند ترمینال در Wine هست (مثلاً MetaQuotes-Demo و Alpari)، درست‌ترین را
+# انتخاب کن: آن‌که harvester/status.json دارد، یا در bases نماد BTC دارد،
+# یا لاگ‌هایش تازه‌تر است. اگر هیچ‌کدام، جدیدترین MQL5.
+pick_files_dir() {
+  local best="" best_score=-1 dir mql score btc
+  while IFS= read -r dir; do
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    mql="$(dirname "$dir")"
+    score=0
+    [[ -f "$dir/harvester/status.json" ]] && score=$((score + 3))
+    btc=$(find "$mql/../bases" -maxdepth 4 -type d -iname '*BTC*' 2>/dev/null | head -n1)
+    [[ -n "$btc" ]] && score=$((score + 2))
+    [[ -d "$mql/Logs" ]] && [[ -n "$(find "$mql/Logs" -maxdepth 1 -type f -newermt '-2 days' 2>/dev/null | head -n1)" ]] && score=$((score + 1))
+    [[ "$score" -gt "$best_score" ]] && { best="$dir"; best_score="$score"; }
+  done < <(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null)
+  printf '%s' "$best"
+}
+
 FILES="${1:-}"
 if [[ -z "$FILES" ]]; then
   log "جست‌وجوی MQL5/Files در $PREFIX ..."
-  FILES="$(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null | head -n1 || true)"
+  ALL="$(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null || true)"
+  if [[ -n "$ALL" ]]; then
+    while IFS= read -r d; do log "   نامزد: $d"; done <<< "$ALL"
+  fi
+  FILES="$(pick_files_dir)"
+  [[ -n "$FILES" ]] && log "انتخاب شد: $FILES"
 fi
 [[ -n "$FILES" ]] || die "MQL5/Files پیدا نشد. یک بار MT5 را باز کن یا مسیر را دستی بده."
 [[ -d "$FILES" ]] || die "مسیر وجود ندارد: $FILES"

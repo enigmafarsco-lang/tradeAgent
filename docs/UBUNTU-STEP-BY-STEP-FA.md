@@ -352,74 +352,55 @@ mt5
 
 ---
 
-## گام ۹ — کپی اکسپرت و کامپایل
+## گام ۹ — کپی اکسپرت و کامپایل (خودکار)
+
+اگر چند ترمینال در Wine داری (مثلاً MetaQuotes-Demo و Alpari-Demo)، اول کدام
+درست است را تشخیص بده و مسیر را ببین:
 
 ```bash
-cd ~/projects/tradeAgent
-FILES="$(find "$WINEPREFIX/drive_c" -type d -path '*MQL5/Files' | head -n1)"
-echo "FILES=$FILES"
-EXPERTS="$(dirname "$FILES")/Experts"
-mkdir -p "$EXPERTS" "$FILES/harvester"
-cp mt5/Experts/TickHarvester.mq5 "$EXPERTS/"
-ls -l "$EXPERTS"
+./scripts/find_mt5_data.sh
 ```
 
-**باید ببینی:** `TickHarvester.mq5` داخل پوشه‌ی Experts.
-
-**کامپایل — دو راه:**
-
-*راه ۱ (پیشنهادی، داخل MT5):* در ترمینال `F4` (MetaEditor) → `File → Open` →
-`MQL5\Experts\TickHarvester.mq5` → `F7` (Compile).
-
-**باید ببینی:** پایین MetaEditor: `0 errors, 0 warnings` و فایل
-`TickHarvester.ex5` کنار `.mq5` ساخته می‌شود.
-
-*راه ۲ (خط فرمان):*
+بعد یک دستور، هر چهار کار را می‌کند: انتخاب ترمینالِ درست (بر اساس
+`harvester/status.json`، وجود نماد BTC در `bases`، و تازگی لاگ‌ها) → کپی
+`TickHarvester.mq5` در `MQL5/Experts` → کامپایل بی‌صدا با `metaeditor64.exe
+/compile` → ساخت `Presets/TickHarvester.set` و `var/mt5/startup.ini`.
 
 ```bash
-./scripts/compile_harvester.sh
+./scripts/attach_harvester.sh                 # تشخیص خودکار نام نماد BTC
+./scripts/attach_harvester.sh --symbol BTCUSD # اگر نام نماد را می‌دانی
+./scripts/attach_harvester.sh --dry-run       # فقط ببین چه می‌کند
 ```
 
-**باید ببینی:** `OK: ...TickHarvester.ex5 ساخته شد`.
+**باید ببینی:** `کامپایل شد → .../Experts/TickHarvester.ex5`
 
-**اگر خطا:** لاگ `TickHarvester.log` کنار فایل را ببین؛ خطای `can't open file` یعنی
-مسیر ویندوزی غلط است — با راه ۱ (F7) انجام بده.
+اگر `ex5` ساخته نشد: در ترمینال `F4` (MetaEditor) → فایل را باز کن → `F7` →
+پایین پنجره باید `0 errors, 0 warnings` بدهد.
 
----
-
-## گام ۱۰ — اجرای اکسپرت روی چارت
-
-1. در MT5 یک چارت باز کن (مثلاً `BTCUSD` تایم‌فریم `M1`).
-2. پنل **Navigator** (Ctrl+N) → `Expert Advisors` → `TickHarvester` را روی چارت بکش.
-3. پنجره‌ی تنظیمات: تب **Common** → تیک **Allow Algo Trading** → `OK`.
-4. دکمه‌ی **AutoTrading** در نوار ابزار باید **سبز** باشد. اگر نیست:
-   `Tools → Options → Expert Advisors → Allow automated trading`.
-5. تب **Experts** (پایین) را باز کن.
-
-**باید ببینی:**
-
-```
-[harvester] 1.00 شروع شد | 14 نماد | پوشه=harvester | poll=250ms | روز=20261126
-[harvester] مسیر فایل‌ها: MQL5\Files\harvester\ticks\<SYMBOL>\<YYYYMMDD>.csv
-```
-
-اگر تعداد نماد `0` بود: چند نماد را در Market Watch اضافه کن یا در تنظیمات اکسپرت
-`InpSymbolsCsv` را پر کن (مثلاً `BTCUSD,ETHUSD,EURUSD`).
-
-بعد از ۲ دقیقه:
+## گام ۱۰ — اجرای ترمینال با چارت و اکسپرت متصل (بدون کشیدن دستی)
 
 ```bash
-find "$FILES/harvester" -type f | head -20
-du -sh "$FILES/harvester"
-tail -3 "$FILES/harvester"/ticks/*/*.csv | head -12
+# اگر ترمینال باز است، اول ببند (File → Exit)
+mt5 "/config:Z:\home\$USER\Documents\GitHub\tradeAgent\var\mt5\startup.ini"
 ```
 
-**باید ببینی:** فایل‌های `ticks/BTCUSD/2026xxxx.csv` با اندازه‌ی چند صد کیلوبایت و
-خطوطی مثل `1764151200123;2026.11.26 08:40:00;91234.12;91240.50;...`.
+`startup.ini` چارت نماد (پیش‌فرض `BTCUSD`, تایم‌فریم `M1`) را باز می‌کند،
+`TickHarvester` را با پارامترهای `Presets/TickHarvester.set` روی آن می‌گذارد و
+`[Experts] Enabled=1` را ست می‌کند (همان دکمه‌ی Algo Trading).
 
-> آخر هفته فارکس بسته است؛ آن موقع فقط کریپتو تیک دارد — طبیعی است.
+**باید ببینی:** گوشه‌ی بالا-راست چارت `:)` (اکسپرت اجرا می‌شود). اگر `:(` بود،
+دکمه‌ی **Algo Trading** در نوار ابزار را روشن کن.
 
----
+**اگر اکسپرت متصل نشد** (بعضی بیلدها `/config` را برای `Expert=` نادیده می‌گیرند):
+دستی بکش — در پنجره‌ی Navigator (Ctrl+N) → `Expert Advisors` →
+`TickHarvester` → روی چارت `BTCUSD` بینداز → در پنجره‌ی باز `OK`.
+
+تأیید ضبط (۱۵ ثانیه بعد):
+
+```bash
+./scripts/find_mt5_data.sh | grep -A3 'MQL5/Files'
+tail -c 400 "$(find ~/Wine/drive_c -path '*harvester/status.json' | head -n1)"
+```
 
 ## گام ۱۱ — وصل کردن ربات به داده
 
@@ -519,36 +500,32 @@ sed -i 's|^TRADEAGENT_LLM_PROVIDER=.*|TRADEAGENT_LLM_PROVIDER=ollama|' .env
 
 ## گام ۱۴ — اجرای دائمی هر ۵ دقیقه
 
+یک دستور، unit را با مسیر واقعیِ همین ریپو می‌سازد (بدون path هاردکد):
+
 ```bash
-cd ~/projects/tradeAgent
+./scripts/install_systemd_user.sh
+```
+
+معادل دستی‌اش اگر خواستی بدانی چه می‌کند:
+
+```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/tradeagent-loop.service ~/.config/systemd/user/
-
-sed -i "s|tradeagent loop --interval 300|tradeagent --config configs/local.toml loop --interval 300|" \
-  ~/.config/systemd/user/tradeagent-loop.service
-grep ExecStart ~/.config/systemd/user/tradeagent-loop.service
-
+# محتوای deploy/tradeagent-loop.service را با %h جایگزین کن:
+#   WorkingDirectory=/home/USER/Documents/GitHub/tradeAgent
+#   ExecStart=/home/USER/Documents/GitHub/tradeAgent/.venv/bin/tradeagent loop --interval 300
 systemctl --user daemon-reload
-systemctl --user enable --now tradeagent-loop
+systemctl --user enable --now tradeagent-loop.service
 loginctl enable-linger "$USER"
 ```
 
-**باید ببینی:**
+بررسی:
 
 ```bash
-systemctl --user status tradeagent-loop --no-pager
-journalctl --user -u tradeagent-loop -n 20 --no-pager
+systemctl --user status tradeagent-loop.service --no-pager | head -12
+journalctl --user -u tradeagent-loop.service -f
 ```
 
-وضعیت `active (running)` و بعد از ۵ دقیقه یک خط «چرخه #1 تمام شد».
-
-پایش زنده:
-
-```bash
-journalctl --user -u tradeagent-loop -f
-```
-
----
+حذف: `./scripts/install_systemd_user.sh --uninstall`
 
 ## گام ۱۵ — چک‌لیست فردا
 
