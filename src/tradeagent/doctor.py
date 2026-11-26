@@ -84,7 +84,7 @@ def run_doctor(cfg: Config, network: bool = False) -> list[Check]:
     except OSError as exc:
         checks.append(Check("پوشه state", FAIL, f"{state_dir}: {exc}"))
 
-    db_path = cfg.path("paper.sqlite3", "var/paper.sqlite3")
+    db_path = cfg.path("paper.sqlite", "var/paper.sqlite3")
     try:
         conn = sqlite3.connect(str(db_path))
         trades = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='trades'").fetchone()

@@ -127,11 +127,25 @@ class Config:
         return dict(value) if isinstance(value, dict) else {}
 
     def path(self, dotted_or_value: str | Path | None, default: str | Path | None = None) -> Path:
-        raw = dotted_or_value
-        if isinstance(raw, str) and ("." in raw or "/" in raw) and self.get(raw, None) is not None:
-            raw = self.get(raw)
+        """مسیر مطلق از یک کلید پیکربندی (``paper.sqlite``) یا یک مسیر خام.
+
+        اگر مقدار یک کلید شناخته‌شده باشد، مقدارش استفاده می‌شود؛ اگر شبیه مسیر
+        باشد (``/`` یا ``~``) همان؛ در غیر این‌صورت ``default``.
+        """
+        fallback = default if default is not None else "."
+        raw: Any = None
+        if isinstance(dotted_or_value, Path):
+            raw = dotted_or_value
+        elif isinstance(dotted_or_value, str):
+            resolved = self.get(dotted_or_value, None)
+            if resolved is not None:
+                raw = resolved
+            elif "/" in dotted_or_value or dotted_or_value.startswith("~") or dotted_or_value.startswith("."):
+                raw = dotted_or_value
+            else:
+                raw = fallback
         if raw in (None, ""):
-            raw = default if default is not None else "."
+            raw = fallback
         path = Path(str(raw)).expanduser()
         if not path.is_absolute():
             path = self.root / path

@@ -22,7 +22,7 @@ def cfg(tmp_path: Path) -> Config:
     cfg.set("data.symbols", ["BTCUSD", "ETHUSD"])
     cfg.set("data.warmup_bars", 400)
     cfg.set("data.max_bars_per_cycle", 3600)
-    cfg.set("paper.sqlite3", str(tmp_path / "var" / "paper.sqlite3"))
+    cfg.set("paper.sqlite", str(tmp_path / "var" / "paper.sqlite3"))
     cfg.set("paper.starting_balance", 10000.0)
     cfg.set("paper.max_open_positions", 3)
     cfg.set("publish.enabled", False)

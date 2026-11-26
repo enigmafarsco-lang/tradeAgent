@@ -130,7 +130,7 @@ def cmd_demo(cfg: Config, args: argparse.Namespace) -> int:
     ensure_dir(demo_root)
     cfg.set("data.source", "synthetic")
     cfg.set("data.state_dir", str(demo_root))
-    cfg.set("paper.sqlite3", str(demo_root / "paper.sqlite3"))
+    cfg.set("paper.sqlite", str(demo_root / "paper.sqlite3"))
     cfg.set("publish.enabled", False)
     cfg.set("llm.enabled", False)
     cfg.set("data.symbols", ["BTCUSD", "ETHUSD", "SOLUSD", "EURUSD"])
@@ -157,7 +157,7 @@ def cmd_demo(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_status(cfg: Config, args: argparse.Namespace) -> int:
-    store = Store(cfg.path("paper.sqlite3", "var/paper.sqlite3"))
+    store = Store(cfg.path("paper.sqlite", "var/paper.sqlite3"))
     policy = store.get_meta("policy") or {}
     payload = {
         "ts": utc_iso(),

@@ -32,7 +32,7 @@ class Runner:
         self.cfg_path = cfg_path
         self.state_dir = ensure_dir(cfg.state_dir)
         self.reports_dir = ensure_dir(self.state_dir / "reports")
-        self.store = Store(cfg.path("paper.sqlite3", "var/paper.sqlite3"))
+        self.store = Store(cfg.path("paper.sqlite", "var/paper.sqlite3"))
         self.engine = PaperEngine(cfg, self.store)
         self.adaptive = AdaptiveController(
             baseline_variant=str(cfg.get("policy.baseline_variant", "momentum")),

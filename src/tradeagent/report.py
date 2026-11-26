@@ -150,13 +150,13 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
     lines.append(f"- دلیل آخرین تغییر: {result.policy.get('reason') or '—'}")
     if result.decisions:
         lines.append("")
-        lines.append("**تغییرات ثبت‌شده در این چرخه:**")
+        lines.append("**تغییرات اعمال‌شده برای چرخه‌ی بعد:**")
         for decision in result.decisions:
             lines.append(_decision_line(decision))
             lines.extend(_changes_block(decision))
     else:
         lines.append("")
-        lines.append("**تغییر سیاستی در این چرخه اعمال نشد.**")
+        lines.append("**بدون تغییر سیاست برای چرخه‌ی بعد.**")
     next_policy = result.extra.get("next_policy")
     if next_policy:
         lines.append("")

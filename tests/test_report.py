@@ -110,4 +110,4 @@ def test_daily_and_state_and_readme() -> None:
 def test_empty_trades_renders_gracefully() -> None:
     md = render_markdown(make_result(closed_trades=[], open_positions=[], decisions=[]))
     assert "معامله‌ای بسته نشد" in md
-    assert "تغییر سیاستی در این چرخه اعمال نشد" in md
+    assert "بدون تغییر سیاست برای چرخه‌ی بعد" in md

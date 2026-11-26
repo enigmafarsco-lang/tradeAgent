@@ -25,9 +25,17 @@ def test_config_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_config_paths_expand(tmp_path: Path) -> None:
-    cfg = Config({"data": {"state_dir": "var", "abs": "/tmp/x"}}, root=tmp_path)
+    cfg = Config({"data": {"state_dir": "var", "abs": "/tmp/x"},
+                  "paper": {"sqlite": "var/paper.sqlite3"}}, root=tmp_path)
     assert cfg.path("data.state_dir") == tmp_path / "var"
     assert cfg.path("data.abs") == Path("/tmp/x")
+    # کلید نقطه‌ای → مقدار پیکربندی
+    assert cfg.path("paper.sqlite") == tmp_path / "var" / "paper.sqlite3"
+    # کلید ناشناخته → پیش‌فرض (نه تبدیل به مسیر بی‌معنی در ریشه)
+    assert cfg.path("paper.unknown_key", "var/fallback.db") == tmp_path / "var" / "fallback.db"
+    # مسیر خام
+    assert cfg.path("/tmp/raw.db") == Path("/tmp/raw.db")
+    assert cfg.path("/tmp/raw2.db", "var/x") == Path("/tmp/raw2.db")
 
 
 def test_atomic_write_and_json(tmp_path: Path) -> None:
