@@ -289,7 +289,8 @@ interactive() {
   if command -v ollama >/dev/null; then
     if ! ollama_up; then
       warn "starting the local ollama server"
-      (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; sleep 3
+      (nohup ollama serve >/tmp/ollama.log 2>&1 &)
+      wait_ollama 30 || warn "it did not open $OLLAMA_URL - see /tmp/ollama.log"
     fi
     if ollama_up; then
       # مدلی که در .env است، وگرنه هر مدلی که نصب است
@@ -370,8 +371,13 @@ repair_ollama() {
   tmp="/tmp/ollama-linux-${arch}.tar.zst"
 
   if ollama_lib_ok; then
-    ok "the llama-server runtime is already present - nothing to repair"
-    return 0
+    if ollama_up; then
+      ok "runtime present and the server is answering - verifying the model"
+    else
+      warn "runtime is installed but the server is down - restarting and verifying"
+    fi
+    ollama_restart_and_verify "${1:-$DEFAULT_OLLAMA}"
+    return $?
   fi
   warn "ollama is installed but its inference engine (llama-server) is missing."
   warn "This is what an interrupted download leaves behind. Downloading again (~1.6 GB,"
@@ -402,29 +408,50 @@ repair_ollama() {
   ollama_lib_ok || { bad "extraction finished but llama-server is still missing"; return 1; }
   ok "inference engine installed: $(ollama_lib_ok && echo ok)"
 
-  if command -v systemctl >/dev/null && systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
-    sudo systemctl restart ollama 2>/dev/null && ok "restarted the ollama service"
+  ollama_restart_and_verify "$( [[ -n "${1:-}" ]] && echo "$1" || echo "$DEFAULT_OLLAMA" )"
+  return $?
+}
+
+ollama_restart_and_verify() {
+  local model="${1:-$DEFAULT_OLLAMA}"
+
+  if ollama_up; then
+    ok "server already answers at $OLLAMA_URL"
+  elif command -v systemctl >/dev/null && systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
+    dim "restarting the system ollama service (sudo may ask for the password)"
+    sudo systemctl restart ollama 2>&1 | tail -3
+    if ! wait_ollama; then
+      bad "the ollama service did not come back"
+      sudo systemctl status ollama --no-pager -l 2>&1 | tail -12 | sed 's/^/    /'
+      dim "details: journalctl -u ollama -n 40 --no-pager"
+      return 1
+    fi
   else
+    warn "no systemd unit for ollama - starting 'ollama serve' myself"
     pkill -f 'ollama serve' 2>/dev/null
     sleep 1
     (nohup ollama serve >/tmp/ollama.log 2>&1 &)
-    sleep 3
+    if ! wait_ollama; then
+      bad "ollama serve did not open $OLLAMA_URL"
+      tail -15 /tmp/ollama.log 2>/dev/null | sed 's/^/    /'
+      return 1
+    fi
   fi
-  ollama_up || { bad "server is still not up; see /tmp/ollama.log"; return 1; }
+  ok "server is up: $(ollama --version 2>/dev/null | head -n1)"
 
-  local model="${1:-$DEFAULT_OLLAMA}"
   ollama_models | grep -qx "$model" || ollama pull "$model" || return 1
   ollama_probe "$model"
-  if [[ $? -eq 0 ]]; then
-    set_env TRADEAGENT_LLM_PROVIDER ollama
-    set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
-    set_env TRADEAGENT_OLLAMA_MODEL "$model"
-    ok "repaired and verified: $model -> $OLLAMA_ANS"
-    ok "now: systemctl --user restart tradeagent-loop.service"
-    return 0
+  if [[ $? -ne 0 ]]; then
+    bad "the runtime works but the model does not: ${OLLAMA_ERR:-unknown}"
+    hint_repair
+    return 1
   fi
-  bad "runtime is installed but the model still fails: ${OLLAMA_ERR:-unknown}"
-  return 1
+  set_env TRADEAGENT_LLM_PROVIDER ollama
+  set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
+  set_env TRADEAGENT_OLLAMA_MODEL "$model"
+  ok "verified: $model -> $OLLAMA_ANS"
+  ok "now: systemctl --user restart tradeagent-loop.service"
+  return 0
 }
 
 script_version() {
@@ -432,6 +459,15 @@ script_version() {
 }
 
 ollama_up() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" | grep -q '"models"'; }
+
+wait_ollama() {  # wait_ollama [seconds]
+  local limit="${1:-${OLLAMA_WAIT_S:-60}}" n=0
+  while (( n < limit )); do
+    ollama_up && return 0
+    sleep 1; n=$((n + 1))
+  done
+  return 1
+}
 
 ollama_models() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" \
   | python3 -c 'import json,sys
@@ -632,8 +668,15 @@ print("available   :", ", ".join(ms[:8]))
       repair_ollama "$DEFAULT_OLLAMA"
       exit $?
     fi
-    ollama_up || { warn "starting server"; (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
-    ollama_up || { bad "server still down; see /tmp/ollama.log"; exit 1; }
+    if ! ollama_up; then
+      warn "starting the server"
+      if command -v systemctl >/dev/null && systemctl list-unit-files 2>/dev/null | grep -q '^ollama.service'; then
+        sudo systemctl start ollama 2>&1 | tail -2
+      else
+        (nohup ollama serve >/tmp/ollama.log 2>&1 &)
+      fi
+    fi
+    wait_ollama || { bad "server did not come up; see journalctl -u ollama or /tmp/ollama.log"; exit 1; }
     curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$DEFAULT_OLLAMA\"" || ollama pull "$DEFAULT_OLLAMA" || exit 1
     set_env TRADEAGENT_LLM_PROVIDER ollama
     set_env TRADEAGENT_OLLAMA_MODEL "$DEFAULT_OLLAMA"
