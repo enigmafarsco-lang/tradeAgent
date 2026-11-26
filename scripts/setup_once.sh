@@ -8,8 +8,8 @@
 #   4. connect_harvester.sh + tradeagent doctor
 #   5. first real cycle + report
 #
-#   ./scripts/setup_once.sh                 # full run (closes MT5 itself)
-#   ./scripts/setup_once.sh --no-restart    # keep the running terminal
+#   ./scripts/setup_once.sh                 # never touches a running terminal
+#   ./scripts/setup_once.sh --restart       # close and relaunch it (destroys the session)
 #   ./scripts/setup_once.sh --no-cycle      # stop after doctor
 #   ./scripts/setup_once.sh --wait 240      # seconds to wait for status.json
 #   ./scripts/setup_once.sh --preview       # print the exact wine command, do nothing
@@ -21,7 +21,7 @@ cd "$ROOT"
 PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
 export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
-RESTART=1
+RESTART=0
 DO_CYCLE=1
 WAIT=150
 PREVIEW=0
@@ -29,6 +29,7 @@ PREVIEW=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-restart) RESTART=0; shift ;;
+    --restart)    RESTART=1; shift ;;
     --no-cycle)   DO_CYCLE=0; shift ;;
     --wait)       WAIT="$2"; shift 2 ;;
     --preview)    PREVIEW=1; shift ;;
@@ -84,7 +85,7 @@ launch() {
       sleep 3
       ok "closed the running terminal"
     else
-      hint "terminal is running and --no-restart was given; /config will not apply"
+      hint "terminal already running: leaving it alone (no kill, no /config). Add --restart to force."
       return 0
     fi
   fi
@@ -133,14 +134,14 @@ else
   if ! logged_in; then
     bad "the terminal is NOT logged in (bases/ is empty) -> no symbols, no chart, no ticks"
     hint "log in once in the MT5 window (File -> Login to Trade Account), then rerun:"
-    hint "  ./scripts/setup_once.sh --no-restart --wait 120"
+    hint "  ./scripts/setup_once.sh --wait 120"
     exit 4
   fi
   bad "logged in, but the EA has not written anything yet"
   [[ -n "$H" && -d "$H" ]] && echo "  harvester dir exists, contents: $(ls -A "$H" | tr '\n' ' ')"
   hint "MT5: Ctrl+N -> Expert Advisors -> TickHarvester -> drag onto a chart"
   hint "     -> check 'Allow Algo Trading' -> OK -> 'Algo Trading' button green"
-  hint "then: ./scripts/setup_once.sh --no-restart --wait 120"
+  hint "then: ./scripts/setup_once.sh --wait 120"
   exit 3
 fi
 
