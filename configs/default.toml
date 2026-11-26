@@ -1,0 +1,75 @@
+# پیکربندی پیش‌فرض TradeAgent -- همه چیز اینجا، بدون کد هاردکد.
+# مسیرهای نسبی، نسبت به ریشه‌ی همین ریپو باز می‌شوند. ~ هم پشتیبانی می‌شود.
+
+[general]
+timezone = "UTC"
+log_level = "INFO"
+
+[data]
+# harvester = خواندن واقعی از پوشه‌ی MQL5/Files/harvester که اکسپرت می‌نویسد
+# synthetic = داده‌ی ساختگی قطعی برای تست بدون متاتریدر
+source = "harvester"
+harvester_dir = "~/mt5/MQL5/Files/harvester"
+state_dir = "var"
+# نمادهای هدف؛ خالی = خودکار از symbols.json اکسپرت (فقط نمادهای ۲۴ ساعته)
+symbols = []
+# چند کندل ۱ ثانیه‌ای قبل از اولین کندل این چرخه برای گرم‌کردن اندیکاتورها لازم است
+warmup_bars = 2400
+# سقف کندل پردازشی در هر چرخه، برای اینکه یک بک‌لاگ بزرگ اجرا را قفل نکند
+max_bars_per_cycle = 7200
+# اگر داده‌ی یک نماد از این مقدار قدیمی‌تر باشد، در گزارش هشدار می‌خورد
+stale_after_s = 180
+
+[paper]
+starting_balance = 10000.0
+risk_per_trade_pct = 0.5
+max_open_positions = 4
+# اگر افت روزانه از این درصد گذشت، تا پایان روز معامله‌ی کاغذی جدید باز نمی‌شود
+daily_loss_stop_pct = 3.0
+slippage_bps = 0.8
+commission_bps = 0.2
+sqlite = "var/paper.sqlite3"
+# فقط کاغذی. این پروژه هیچ مسیری برای ارسال سفارش واقعی ندارد.
+live_trading = false
+
+[policy]
+baseline_variant = "momentum"
+# چند ضرر پشت‌سرهم باعث شروع نردبان سازگاری می‌شود
+adapt_after_losses = 2
+# بین دو تغییر سیاست حداقل چند چرخه فاصله باشد
+adapt_cooldown_cycles = 2
+# چند برد پشت‌سرهم یک پله عقب‌نشینی می‌کند
+recover_after_wins = 2
+max_level = 5
+
+[llm]
+enabled = true
+# gemini | ollama | none  (اگر کلید/سرور نبود، خودکار به حالت قطعی برمی‌گردد)
+provider = "gemini"
+model = "gemini-2.5-flash"
+timeout_s = 45
+# حداکثر هر چند چرخه یک بار مدل صدا زده شود (۵ دقیقه × ۳ = ۱۵ دقیقه)
+every_cycles = 3
+max_calls_per_hour = 12
+gemini_api_key_env = "GEMINI_API_KEY"
+ollama_url = "http://127.0.0.1:11434"
+ollama_model = "qwen2.5:7b-instruct"
+
+[report]
+# گزارش‌ها هم محلی نوشته می‌شوند (var/reports) و هم داخل مخزن گزارش publish می‌شوند
+dir = "reports/paper"
+max_trades_in_report = 40
+
+[publish]
+enabled = true
+# خالی = همان origin همین ریپو
+remote = ""
+branch = "reports"
+# کلون جداگانه برای انتشار؛ ریپوی کد را هرگز دست نمی‌زند
+dir = "var/publish"
+# every_cycle | daily
+mode = "every_cycle"
+max_commits_per_hour = 20
+push_timeout_s = 120
+author_name = "tradeagent-bot"
+author_email = "tradeagent@localhost"

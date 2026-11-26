@@ -1,0 +1,233 @@
+"""مشاور مدل زبانی: Gemini رایگان یا Ollama محلی.
+
+قواعد:
+
+* مدل **هرگز** مستقیم معامله نمی‌کند؛ فقط یک پیشنهاد JSON برای سیاست می‌دهد.
+* خروجی مدل با :func:`tradeagent.policy.validate_proposal` سنجیده می‌شود.
+* اگر کلید/سرور نبود، پاسخ خراب بود یا سهمیه تمام شد، سیستم با سیاست قطعی ادامه می‌دهد.
+* تعداد فراخوانی‌ها ساعتی محدود است (بودجه‌ی محلی، در فایل state ذخیره می‌شود).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from .config import Config
+from .util import LOG, read_json, utc_iso, write_json
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+
+SYSTEM_PROMPT = """تو یک مشاور ریسک برای یک سیستم معامله‌ی کاغذی (paper trading) هستی.
+فقط JSON معتبر برگردان، بدون متن اضافه. ساختار مجاز:
+
+{"variant": "momentum|meanrev|scalp",
+ "params": {"breakout_k": 1.1, "sl_atr": 1.4, "rr": 1.5, "hold_s": 900,
+            "min_edge_bps": 2.5, "max_spread_bps": 5.0, "cooldown_s": 90,
+            "z_entry": 2.0, "max_vol_bps": 70, "lookback_s": 300},
+ "reason": "یک یا دو جمله فارسی",
+ "confidence": 0.0-1.0,
+ "notes": ["حداکثر سه نکته"]}
+
+قواعد سخت: هر پارامتر حداکثر ۲۰٪ نسبت به مقدار فعلی جابه‌جا شود؛ هیچ کلید دیگری
+اضافه نکن؛ ریسک، اهرم، سقف ضرر روزانه و لیست نمادها قابل تغییر نیستند. اگر داده کافی
+نیست، همان سیاست فعلی را با تغییر صفر و confidence پایین برگردان."""
+
+
+@dataclass
+class LLMResult:
+    proposal: dict[str, Any] | None
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **headers}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - آدرس از پیکربندی می‌آید
+        raw = resp.read().decode("utf-8", errors="replace")
+    return json.loads(raw) if raw else {}
+
+
+class LLMAdvisor:
+    """فراخوانی محدود و بی‌خطر مدل؛ همیشه با fallback قطعی."""
+
+    def __init__(
+        self,
+        cfg: Config,
+        state_path: Path,
+        transport: Callable[[str, dict[str, Any], dict[str, str], float], dict[str, Any]] = http_post_json,
+    ) -> None:
+        self.cfg = cfg
+        self.state_path = Path(state_path)
+        self.transport = transport
+        self.enabled = bool(cfg.get("llm.enabled", True))
+        self.provider = str(cfg.get("llm.provider", "none") or "none").lower()
+        self.model = str(cfg.get("llm.model", "gemini-2.5-flash"))
+        self.ollama_model = str(cfg.get("llm.ollama_model", "qwen2.5:7b-instruct"))
+        self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
+        self.timeout = float(cfg.get("llm.timeout_s", 45))
+        self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
+        self.max_calls_per_hour = max(0, int(cfg.get("llm.max_calls_per_hour", 12)))
+        self.key_env = str(cfg.get("llm.gemini_api_key_env", "GEMINI_API_KEY"))
+
+    # -- وضعیت ---------------------------------------------------------
+    def api_key(self) -> str:
+        return os.environ.get(self.key_env, "") or os.environ.get("GOOGLE_API_KEY", "")
+
+    def available(self) -> tuple[bool, str]:
+        if not self.enabled or self.provider in ("", "none", "off"):
+            return False, "مدل زبانی غیرفعال است"
+        if self.provider == "gemini" and not self.api_key():
+            return False, f"متغیر {self.key_env} تنظیم نشده"
+        if self.provider == "ollama" and not self.ollama_url.startswith("http"):
+            return False, "آدرس Ollama نامعتبر است"
+        return True, "ok"
+
+    def _calls(self) -> list[float]:
+        raw = read_json(self.state_path, {"calls": []}) or {}
+        calls = raw.get("calls", []) if isinstance(raw, dict) else []
+        return [float(c) for c in calls if isinstance(c, (int, float))]
+
+    def _record_call(self) -> None:
+        now = time.time()
+        calls = [c for c in self._calls() if now - c < 3600] + [now]
+        write_json(self.state_path, {"calls": calls, "last_call": utc_iso(now)})
+
+    def calls_last_hour(self) -> int:
+        now = time.time()
+        return len([c for c in self._calls() if now - c < 3600])
+
+    def should_consult(self, cycle: int, force: bool = False) -> bool:
+        ok, _ = self.available()
+        if not ok:
+            return False
+        if force:
+            return True
+        if cycle % self.every_cycles != 0:
+            return False
+        return self.calls_last_hour() < self.max_calls_per_hour
+
+    # -- فراخوانی ------------------------------------------------------
+    def _build_prompt(self, context: dict[str, Any]) -> str:
+        return (
+            "وضعیت فعلی سیستم معامله‌ی کاغذی:\n"
+            + json.dumps(context, ensure_ascii=False, indent=1)
+            + "\n\nفقط JSON بده."
+        )
+
+    def _call_gemini(self, prompt: str) -> tuple[str, dict[str, Any]]:
+        key = self.api_key()
+        url = GEMINI_URL.format(model=self.model, key=key)
+        payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.35,
+                "maxOutputTokens": 900,
+                "responseMimeType": "application/json",
+            },
+        }
+        data = self.transport(url, payload, {}, self.timeout)
+        text = ""
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            text = json.dumps(data, ensure_ascii=False)[:800]
+        usage = data.get("usageMetadata", {}) if isinstance(data, dict) else {}
+        return text, {"usage": usage}
+
+    def _call_ollama(self, prompt: str) -> tuple[str, dict[str, Any]]:
+        url = f"{self.ollama_url}/api/chat"
+        payload = {
+            "model": self.ollama_model,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0.35},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        data = self.transport(url, payload, {}, self.timeout)
+        text = ""
+        try:
+            text = data["message"]["content"]
+        except (KeyError, TypeError):
+            text = json.dumps(data, ensure_ascii=False)[:800]
+        return text, {"model": self.ollama_model}
+
+    def consult(self, context: dict[str, Any], force: bool = False) -> LLMResult:
+        ok, why = self.available()
+        meta: dict[str, Any] = {
+            "provider": self.provider,
+            "model": self.model if self.provider == "gemini" else self.ollama_model,
+            "ok": False,
+            "ts": utc_iso(),
+        }
+        if not ok:
+            meta["error"] = why
+            return LLMResult(None, meta)
+        if not force and self.calls_last_hour() >= self.max_calls_per_hour:
+            meta["error"] = f"سهمیه‌ی ساعتی ({self.max_calls_per_hour}) پر است"
+            return LLMResult(None, meta)
+
+        prompt = self._build_prompt(context)
+        started = time.time()
+        try:
+            if self.provider == "gemini":
+                text, extra = self._call_gemini(prompt)
+            elif self.provider == "ollama":
+                text, extra = self._call_ollama(prompt)
+            else:
+                meta["error"] = f"provider پشتیبانی‌نشده: {self.provider}"
+                return LLMResult(None, meta)
+        except urllib.error.HTTPError as exc:
+            meta["error"] = f"HTTP {exc.code}: {exc.reason}"
+            meta["latency_ms"] = int((time.time() - started) * 1000)
+            LOG.warning("فراخوانی مدل شکست خورد: %s", meta["error"])
+            self._record_call()
+            return LLMResult(None, meta)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            meta["error"] = f"{type(exc).__name__}: {exc}"
+            meta["latency_ms"] = int((time.time() - started) * 1000)
+            LOG.warning("فراخوانی مدل شکست خورد: %s", meta["error"])
+            self._record_call()
+            return LLMResult(None, meta)
+
+        self._record_call()
+        meta.update(extra)
+        meta["latency_ms"] = int((time.time() - started) * 1000)
+        meta["raw_excerpt"] = (text or "")[:600]
+        try:
+            proposal = json.loads(_strip_code_fence(text))
+        except ValueError:
+            meta["error"] = "پاسخ مدل JSON معتبر نبود"
+            LOG.warning("%s | پاسخ: %s", meta["error"], (text or "")[:200])
+            return LLMResult(None, meta)
+        if not isinstance(proposal, dict):
+            meta["error"] = "پاسخ مدل dict نبود"
+            return LLMResult(None, meta)
+        meta["ok"] = True
+        return LLMResult(proposal, meta)
+
+
+def _strip_code_fence(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1]
+    return text

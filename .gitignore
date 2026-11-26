@@ -1,0 +1,27 @@
+# پایتون
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# وضعیت محلی و داده‌ها — هرگز کامیت نشود
+var/
+*.sqlite3
+*.sqlite3-journal
+*.log
+
+# پیکربندی محلی (مسیرهای این کامپیوتر، کلیدها از محیط می‌آیند)
+configs/local.toml
+.env
+
+# کلون انتشار گزارش‌ها (جدا از ریپوی کد)
+publish/
+
+# فایل‌های ویندوزی/واین
+*.ex5
+*.ex4
+*.log
+desktop.ini

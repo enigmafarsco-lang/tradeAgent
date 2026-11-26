@@ -1,0 +1,23 @@
+[Unit]
+Description=TradeAgent — حلقه‌ی کاغذی ۵ دقیقه‌ای با گزارش گیت
+Documentation=file://%h/tradeAgent/docs/RUNBOOK-FA.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tradeAgent
+# اگر پیکربندی محلی داری: --config configs/local.toml
+ExecStart=%h/tradeAgent/.venv/bin/tradeagent loop --interval 300
+Environment=PYTHONUNBUFFERED=1
+# کلید مدل از فایل محیط خوانده می‌شود (نه از unit، نه از گیت)
+EnvironmentFile=-%h/tradeAgent/.env
+Restart=always
+RestartSec=15
+# حلقه خودش قفل دارد؛ این محدودیت‌ها فقط محافظ اضافه‌اند
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
