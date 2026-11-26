@@ -45,6 +45,20 @@ done
 # ۱) انتخاب ترمینال
 # امتیاز: وجود harvester/status.json (۳) + داده‌ی نماد BTC در bases (۲)
 #        + تازگی MQL5/Logs (۱). بیشترین امتیاز برنده است.
+# فهرست همه‌ی MQL5 های ممکن: prefix فعال، ~/.wine، و WSL
+scan_mql5_dirs() {
+  local roots=("$PREFIX/drive_c" "${HOME}/.wine/drive_c" "/mnt/c/Users")
+  local r f
+  for r in "${roots[@]}"; do
+    [[ -d "$r" ]] || continue
+    find "$r" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*/MQL5' 2>/dev/null
+    # بعضی نصب‌ها MQL5 را جای دیگری می‌گذارند
+    for f in $(find "$r" -maxdepth 12 -type d -name MQL5 -path '*Files*' 2>/dev/null); do
+      printf '%s\n' "$(dirname "$f")"
+    done
+  done | sort -u
+}
+
 pick_data_dir() {
   local best="" best_score=-1 dir score logs_age btc
   while IFS= read -r dir; do
@@ -58,7 +72,7 @@ pick_data_dir() {
       [[ "$logs_age" -gt 0 ]] && score=$((score + 1))
     fi
     if [[ "$score" -gt "$best_score" ]]; then best="$dir"; best_score=$score; fi
-  done < <(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MetaQuotes/Terminal/*/MQL5' 2>/dev/null)
+  done < <(scan_mql5_dirs)
   printf '%s' "$best"
 }
 
@@ -68,9 +82,19 @@ else
   log "جست‌وجوی ترمینال‌های MT5 داخل $PREFIX ..."
   DATA_DIR="$(pick_data_dir)"
 fi
-[[ -n "$DATA_DIR" && -d "$DATA_DIR" ]] || die "هیچ MQL5 پیدا نشد. یک بار ترمینال را باز کن، یا --data-dir بده."
+if [[ -z "$DATA_DIR" || ! -d "$DATA_DIR" ]]; then
+  warn "هیچ MQL5 پیدا نشد. چیزی که دیدم:"
+  echo "  WINEPREFIX=$PREFIX (drive_c: $([[ -d "$PREFIX/drive_c" ]] && echo هست || echo نیست))"
+  echo "  ~/.wine/drive_c: $([[ -d "$HOME/.wine/drive_c" ]] && echo هست || echo نیست)"
+  echo "  پوشه‌های Terminal که پیدا شد:"
+  find "$HOME" -maxdepth 12 -type d -name Terminal -path '*MetaQuotes*' 2>/dev/null | sed 's/^/    /'
+  echo "  هر MQL5 در HOME:"
+  find "$HOME" -maxdepth 14 -type d -name MQL5 2>/dev/null | sed 's/^/    /'
+  die "اگر ترمینال باز است و MQL5 ساخته شده، مسیر را بده: --data-dir \"<...>/MQL5\""
+fi
 ok "داده‌ی ترمینال: $DATA_DIR"
 
+[[ "${DATA_DIR##*/}" == "Files" ]] && DATA_DIR="$(dirname "$DATA_DIR")"
 EXPERTS="$DATA_DIR/Experts"
 FILES="$DATA_DIR/Files"
 PRESETS="$DATA_DIR/Presets"
