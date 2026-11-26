@@ -6,6 +6,20 @@
 فرض: Ubuntu **22.04** یا **24.04**، کاربر معمولی با دسترسی `sudo`، اینترنت دارد.
 زمان تقریبی کل مسیر: ۳۵–۵۰ دقیقه (بیشترش دانلود و نصب Wine/MT5).
 
+### «`cd ~/projects/tradeAgent` یعنی چه؟»
+
+* `~/projects` فقط یک **پوشه‌ی معمولی** است که خودت می‌سازی (`mkdir -p ~/projects`).
+  هیچ چیز جادویی ندارد؛ می‌توانی `~/code` یا `~/trade` هم بگذاری.
+* `tradeAgent` زیرپوشه‌ی آن است که با `git clone` ساخته می‌شود و **کد پروژه** داخلش
+  می‌آید (`README.md`, `src/`, `mt5/`, `scripts/`, …).
+* `cd` = «برو داخل این پوشه». بعد از `cd`، دستورهای بعدی (venv، pytest، tradeagent)
+  در همان پوشه اجرا می‌شوند.
+* تا وقتی `git clone` را اجرا نکرده‌ای، این پوشه **وجود ندارد** و `cd` خطای
+  `No such file or directory` می‌دهد — طبیعی است.
+
+`git` (خط فرمان) چیز اصلی است. GitHub Desktop فقط یک **رابط گرافیکی** روی همان
+`git` است؛ داشتنش اختیاری است (گام ۳ب).
+
 ---
 
 ## گام ۱ — به‌روزرسانی سیستم و ابزارهای پایه
@@ -89,18 +103,54 @@ gh auth status
 
 **باید ببینی:** `✓ Logged in to github.com as <username>`.
 
-> **GitHub Desktop (اختیاری، رسمی نیست):** نسخه‌ی رسمی برای لینوکس وجود ندارد و
-> نسخه‌ی اجتماعی `shiftkey` است. برای این پروژه لازم **نیست** — `git` + `gh` کافی
-> است. اگر باز هم می‌خواهی:
-> ```bash
-> wget -qO- https://apt.packages.shiftkey.dev/gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/shiftkey-packages.gpg >/dev/null
-> echo "deb [arch=amd64 signed-by=/usr/share/keyrings/shiftkey-packages.gpg] https://apt.packages.shiftkey.dev/ubuntu/ any main" | sudo tee /etc/apt/sources.list.d/shiftkey-packages.list
-> sudo apt update && sudo apt install -y github-desktop
-> ```
+### گام ۳ب (اختیاری) — GitHub Desktop برای لینوکس
+
+GitHub برای لینوکس نسخه‌ی رسمی ندارد؛ نسخه‌ی شناخته‌شده فورک `shiftkey` است
+(همان `.deb`/`.rpm`/AppImage). اگر روی آن اوبونتوی دیگر داری، همین است.
+
+```bash
+sudo apt install -y wget gpg
+wget -qO- https://apt.packages.shiftkey.dev/gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/shiftkey-packages.gpg >/dev/null
+sudo sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/shiftkey-packages.gpg] https://apt.packages.shiftkey.dev/ubuntu/ any main" > /etc/apt/sources.list.d/shiftkey-packages.list'
+sudo apt update
+sudo apt install -y github-desktop
+github-desktop --version
+```
+
+**باید ببینی:** یک شماره‌نسخه (مثل `3.4.x`). آیکون برنامه در منوی Applications می‌آید.
+
+**اگر خطا:**
+- `gpg: no valid OpenPGP data found` → اینترنت/DNS یا پروکسی؛ دوباره `wget` را بزن.
+- بسته پیدا نشد (مثلاً معماری ARM) → از صفحه‌ی Releases فایل `.deb` را بگیر:
+  `https://github.com/shiftkey/desktop/releases` و `sudo apt install ./GitHubDesktop-linux-amd64-*.deb`.
+- راه جایگزین (Flatpak): `flatpak install flathub io.github.shiftey.Desktop`.
+
+**کلون با GitHub Desktop (به‌جای گام ۴):**
+
+1. `File → Clone repository → URL`
+2. آدرس: `https://github.com/enigmafarsco-lang/tradeAgent`
+3. `Local path`: مثلاً `/home/<user>/projects` (پوشه‌ی `tradeAgent` خودش ساخته می‌شود)
+4. `Clone` → بعد از پایان، از منوی `Current branch` شاخه‌ی
+   **`arena/e32ad3ff-tradeagent`** را انتخاب کن (شاخه‌ی `main` فقط یک README دارد).
+5. `Repository → Open in Terminal` (یا `Ctrl+``) → از اینجا به‌بعد همان دستورهای
+   ترمینالی گام ۴ را اجرا کن.
+
+> با GitHub Desktop هم **باز هم باید `git` نصب باشد** (در گام ۱ نصب شد) و برای
+> اجرای ربات هم ترمینال لازم داری. پس اگر رابط گرافیکی نمی‌خواهی، گام ۳ب را رد کن.
 
 ---
 
 ## گام ۴ — گرفتن کد و تست بدون متاتریدر
+
+اگر با GitHub Desktop کلون کردی، فقط وارد پوشه شو (مرحله‌ی `git clone` را رد کن):
+
+```bash
+mkdir -p ~/projects            # اگر از قبل نیست
+cd ~/projects/tradeAgent       # پوشه‌ای که در GitHub Desktop انتخاب کردی
+ls
+```
+
+اگر ترمینالی کار می‌کنی:
 
 ```bash
 mkdir -p ~/projects && cd ~/projects
