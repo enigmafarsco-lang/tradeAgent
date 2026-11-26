@@ -165,25 +165,46 @@ fi
 
 # ۴) انتخاب نماد
 SYMBOL="$SYMBOL_ARG"
-if [[ -z "$SYMBOL" ]]; then
-  # مسیرها فاصله دارند (Program Files) → خط‌به‌خط بخوان، xargs نزن
-  BTC_PATH="$(find "$DATA_DIR/../bases" -maxdepth 4 -type d \( -iname '*BTC*' -o -iname '*XBT*' \) 2>/dev/null | head -n1)"
-  [[ -n "$BTC_PATH" ]] && SYMBOL="$(basename "$BTC_PATH")"
-fi
-if [[ -z "$SYMBOL" ]]; then
-  warn "نماد BTC در bases پیدا نشد؛ از BTCUSD استفاده می‌کنم (اگر بروکرت نام دیگری دارد --symbol بده)."
-  SYMBOL="BTCUSD"
-fi
-ok "نماد ضبط: $SYMBOL"
+EXPLICIT=0
+[[ -n "$SYMBOL_ARG" ]] && EXPLICIT=1
 
-# ---------------------------------------------------------------------------
+# نماد چارت: اول از تاریخچه‌ی خود ترمینال (bases/<server>/history/<SYMBOL>),
+# چون نام‌گذاری بروکرها فرق دارد (BTCUSD / BTCUSD.a / XBTUSD ...).
+if [[ -z "$SYMBOL" ]]; then
+  BASES="$DATA_DIR/../bases"
+  HIST="$(find "$BASES" -maxdepth 3 -type d -path '*/history/*' 2>/dev/null)"
+  if [[ -n "$HIST" ]]; then
+    # نمادهایی که کاربر واقعاً باز کرده (تازه‌ترین اول)
+    SYMBOL="$(find "$BASES" -maxdepth 3 -type d -path '*/history/*' -printf '%T@ %f\n' 2>/dev/null \
+              | sort -rn | awk '{print $2}' | head -n1)"
+  fi
+  # اگر چیزی نبود، طلا/بیت‌کوین/یورو را امتحان کن
+  if [[ -z "$SYMBOL" ]] || [[ ! -d "$BASES" ]]; then
+    for cand in XAUUSD XBTUSD BTCUSD EURUSD; do
+      if find "$BASES" -maxdepth 3 -type d -name "$cand" 2>/dev/null | grep -q .; then SYMBOL="$cand"; break; fi
+    done
+  fi
+fi
+if [[ -z "$SYMBOL" ]]; then
+  warn "نمادی در bases پیدا نشد؛ EURUSD می‌گذارم (فقط برای باز شدن چارت)."
+  SYMBOL="EURUSD"
+fi
+ok "نماد چارت: $SYMBOL"
+
+# فهرست نمادهای موجود در ترمینال (برای اینکه ببینی چه داری)
+log "نمادهای موجود در ترمینال (بازشده‌ها):"
+find "$DATA_DIR/../bases" -maxdepth 3 -type d -path '*/history/*' -printf '   %f\n' 2>/dev/null \
+  | sort -u | head -30
+
 # ۵) Preset + startup.ini
 SET_FILE="$PRESETS/TickHarvester.set"
 INI_FILE="$OUT_DIR/startup.ini"
 if [[ $DRY -eq 1 ]]; then
   echo "   + نوشتن $SET_FILE و $INI_FILE"
 else
-  cat > "$SET_FILE" <<EOF
+  if [[ $EXPLICIT -eq 1 ]]; then
+    # نماد دستی: فقط همان
+    cat > "$SET_FILE" <<EOF
 InpOutDir=harvester
 InpPollMs=250
 InpFlushEveryTicks=200
@@ -192,6 +213,18 @@ InpSymbolsCsv=$SYMBOL
 InpAutoDiscover=false
 InpMaxSymbols=40
 EOF
+  else
+    # پیش‌فرض: اکسپرت خودش همه‌ی نمادهای ۲۴ ساعته را پیدا می‌کند
+    cat > "$SET_FILE" <<EOF
+InpOutDir=harvester
+InpPollMs=250
+InpFlushEveryTicks=200
+InpStatusEverySec=5
+InpSymbolsCsv=
+InpAutoDiscover=true
+InpMaxSymbols=40
+EOF
+  fi
   mkdir -p "$OUT_DIR"
   cat > "$INI_FILE" <<EOF
 ; تولیدشده توسط scripts/attach_harvester.sh
