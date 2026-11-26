@@ -415,6 +415,19 @@ mt5 "/config:Z:\home\$USER\Documents\GitHub\tradeAgent\var\mt5\startup.ini"
 tail -c 400 "$(find ~/Wine/drive_c -path '*harvester/status.json' | head -n1)"
 ```
 
+### تشخیص سریع: کدام پوشه داده‌ی واقعی است؟
+
+پوشه‌ی `MQL5` بدون `Logs` = پوشه‌ی داده نیست (ممکن است اسکریپت‌ها ساخته باشند).
+همیشه با این تأیید کن:
+
+```bash
+./scripts/check_harvester.sh
+```
+
+در حالت سالم یک `MQL5/Logs/<date>.log` وجود دارد و `status.json` تازه است.
+اگر `Logs` نبود، اسکریپت خودش `WINEPREFIX` فرآیند در حال اجرا را از `/proc` و
+همه‌ی پوشه‌های `MetaQuotes` را چاپ می‌کند.
+
 ## گام ۱۱ — وصل کردن ربات به داده
 
 ```bash
