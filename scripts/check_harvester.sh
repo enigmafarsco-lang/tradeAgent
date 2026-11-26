@@ -10,6 +10,15 @@ log()  { printf '\033[1;34m[check]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[check]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[check]\033[0m %s\n' "$*"; }
 
+# ۰) هر harvester/status.json در کل prefix: حقیقتِ نهایی ضبط
+echo "--- any harvester output anywhere in the prefix ---"
+find "$PREFIX/drive_c" -maxdepth 16 -name status.json -path '*harvester*' 2>/dev/null | while IFS= read -r f; do
+  echo "  $f"
+  echo "    dir: $(dirname "$f")"
+  ls -la "$(dirname "$f")" 2>/dev/null | sed 's/^/    /' | head -6
+done
+echo
+
 # پوشه‌ی داده = پوشه‌ای که config/ یا bases/ یا MQL5/ دارد
 DATA_ROOT=""
 BEST=-1

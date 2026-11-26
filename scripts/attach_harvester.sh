@@ -59,7 +59,7 @@ find_data_dirs() {
     [[ -d "$r" ]] || continue
     while IFS= read -r -d '' d; do
       # فقط پوشه‌ی ترمینال (دارای config یا bases یا MQL5)
-      if [[ -d "$d/config" || -d "$d/bases" || -d "$d/MQL5" ]]; then printf '%s\n' "$d"; fi
+      if [[ -d "$d/config" || -d "$d/bases" || -d "$d/MQL5" || -f "$d/portable.txt" ]]; then printf '%s\n' "$d"; fi
     done < <(find "$r" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*' -print0 2>/dev/null)
     # حالت portable: پوشه‌ی نصب کنار terminal64.exe
     while IFS= read -r -d '' d; do
@@ -75,6 +75,9 @@ score_dir() {
   [[ -d "$d/MQL5/Files/harvester" ]] && score=$((score + 4))
   [[ -f "$d/MQL5/Files/harvester/status.json" ]] && score=$((score + 4))
   [[ -d "$d/config" ]] && score=$((score + 2))
+  # portable.txt / origin.txt = نشانه‌ی پروفایل زنده‌ی ترمینال
+  [[ -f "$d/portable.txt" ]] && score=$((score + 4))
+  [[ -f "$d/origin.txt" ]] && score=$((score + 2))
   btc=$(find "$d/bases" -maxdepth 3 -type d -iname '*XAU*' -o -maxdepth 3 -type d -iname '*BTC*' 2>/dev/null | head -n1)
   [[ -n "$btc" ]] && score=$((score + 1))
   printf '%s' "$score"
@@ -191,8 +194,9 @@ fi
 # ۳ب) --all: اکسپرت را در Experts همه‌ی پروفایل‌های ترمینال بگذار
 if [[ $ALL_TERMINALS -eq 1 && $DRY -eq 0 ]]; then
   log "installing the EA into every terminal profile:"
-  for prof in "$PREFIX"/drive_c/users/*/AppData/Roaming/MetaQuotes/Terminal/*/; do
+  for prof in "$PREFIX"/drive_c/users/*/AppData/Roaming/MetaQuotes/Terminal/*/ /dev/null; do
     [[ -d "$prof" ]] || continue
+    case "${prof%/}" in */Common|*/Community) continue ;; esac
     mkdir -p "$prof/MQL5/Experts" 2>/dev/null || continue
     cp -f "$EA_SRC" "$prof/MQL5/Experts/TickHarvester.mq5" 2>/dev/null || continue
     if [[ -f "$EXPERTS/TickHarvester.ex5" ]]; then
@@ -200,6 +204,14 @@ if [[ $ALL_TERMINALS -eq 1 && $DRY -eq 0 ]]; then
     fi
     ok "  -> $prof/MQL5/Experts"
   done
+  # حالت portable: MQL5 کنار terminal64.exe
+  INS="$(dirname "$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'terminal64.exe' 2>/dev/null | head -n1)")"
+  if [[ -d "$INS" ]]; then
+    mkdir -p "$INS/MQL5/Experts" 2>/dev/null || true
+    cp -f "$EA_SRC" "$INS/MQL5/Experts/TickHarvester.mq5" 2>/dev/null || true
+    [[ -f "$EXPERTS/TickHarvester.ex5" ]] && cp -f "$EXPERTS/TickHarvester.ex5" "$INS/MQL5/Experts/TickHarvester.ex5" 2>/dev/null || true
+    ok "  -> $INS/MQL5/Experts (portable install dir)"
+  fi
 fi
 
 # ۴) انتخاب نماد
@@ -297,6 +309,9 @@ EOF
   ok "startup.ini -> $INI_FILE"
   [[ $LOGIN_NEEDED -eq 1 ]] && warn "startup.ini has no chart: log in to the account in MT5, then rerun this script."
 fi
+
+WIN_INI="Z:${INI_FILE//\//\\}"
+WIN_TERM="Z:${TERMINAL//\//\\}"
 
 if [[ $QUIET -eq 0 ]]; then
 cat <<EOF
