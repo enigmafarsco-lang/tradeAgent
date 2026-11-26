@@ -18,15 +18,20 @@ die()  { printf '\033[1;31m[connect]\033[0m %s\n' "$*" >&2; exit 1; }
 # وقتی چند ترمینال در Wine هست (مثلاً MetaQuotes-Demo و Alpari)، درست‌ترین را
 # انتخاب کن: آن‌که harvester/status.json دارد، یا در bases نماد BTC دارد،
 # یا لاگ‌هایش تازه‌تر است. اگر هیچ‌کدام، جدیدترین MQL5.
+dir_ci() {
+  find "$1" -maxdepth 1 -mindepth 1 -type d -iname "$2" 2>/dev/null | head -n1
+}
+
 score_files_dir() {
-  local dir="$1" mql score=0 syms
+  local dir="$1" mql score=0 syms bases
   mql="$(dirname "$dir")"
   if [[ -f "$dir/harvester/status.json" ]]; then
     score=$((score + 3))
     [[ -n "$(find "$dir/harvester/status.json" -newermt '-10 minutes' 2>/dev/null)" ]] && score=$((score + 10))
   fi
   [[ -d "$dir/harvester/ticks" ]] && score=$((score + 2))
-  [[ -n "$(find "$mql/../bases" -maxdepth 4 -type d -path '*/history/*' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
+  bases="$(dir_ci "$mql/.." bases)"
+  [[ -n "$bases" ]] && [[ -n "$(find "$bases" -maxdepth 4 -type d -ipath '*/history/*' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
   [[ -f "$mql/../terminal64.exe" ]] && score=$((score + 1))
   [[ -n "$(find "$mql/../logs" -maxdepth 1 -type f -newermt '-30 minutes' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
   printf '%s' "$score"

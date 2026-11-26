@@ -26,6 +26,10 @@ LIST_SYMBOLS=0
 ALL_TERMINALS=0
 OUT_DIR="$ROOT/var/mt5"
 
+dir_ci() {  # dir_ci <parent> <name>  → نخستین زیرپوشه با نام بی‌توجه به حرف
+  find "$1" -maxdepth 1 -mindepth 1 -type d -iname "$2" 2>/dev/null | head -n1
+}
+
 log()  { printf '\033[1;34m[attach]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m[attach]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[attach]\033[0m %s\n' "$*"; }
@@ -59,7 +63,7 @@ find_data_dirs() {
     [[ -d "$r" ]] || continue
     while IFS= read -r -d '' d; do
       # فقط پوشه‌ی ترمینال (دارای config یا bases یا MQL5)
-      if [[ -d "$d/config" || -d "$d/bases" || -d "$d/MQL5" || -f "$d/portable.txt" ]]; then printf '%s\n' "$d"; fi
+      if [[ -n "$(dir_ci "$d" config)" || -n "$(dir_ci "$d" bases)" || -d "$d/MQL5" || -f "$d/portable.txt" ]]; then printf '%s\n' "$d"; fi
     done < <(find "$r" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*' -print0 2>/dev/null)
     # حالت portable: پوشه‌ی نصب کنار terminal64.exe
     while IFS= read -r -d '' d; do
@@ -69,25 +73,25 @@ find_data_dirs() {
 }
 
 score_dir() {
-  local d="$1" score=0 hit
+  local d="$1" score=0 hit bases mql
+  bases="$(dir_ci "$d" bases)"
+  mql="$(dir_ci "$d" MQL5)"
   # قوی‌ترین شاهد: خروجی تیک تازه (همان چیزی که connect هم می‌سنجد)
-  if [[ -f "$d/MQL5/Files/harvester/status.json" ]]; then
+  if [[ -n "$mql" && -f "$mql/Files/harvester/status.json" ]]; then
     score=$((score + 4))
-    [[ -n "$(find "$d/MQL5/Files/harvester/status.json" -newermt '-10 minutes' 2>/dev/null)" ]] && score=$((score + 12))
+    [[ -n "$(find "$mql/Files/harvester/status.json" -newermt '-10 minutes' 2>/dev/null)" ]] && score=$((score + 12))
   fi
-  [[ -d "$d/MQL5/Files/harvester/ticks" ]] && score=$((score + 3))
-  if [[ -d "$d/bases" ]]; then
+  [[ -n "$mql" && -d "$mql/Files/harvester/ticks" ]] && score=$((score + 3))
+  if [[ -n "$bases" ]]; then
     score=$((score + 3))
-    hit=$(find "$d/bases" -maxdepth 4 -type d -path '*/history/*' 2>/dev/null | head -n1)
+    hit=$(find "$bases" -maxdepth 4 -type d -ipath '*/history/*' 2>/dev/null | head -n1)
     [[ -n "$hit" ]] && score=$((score + 2))
   fi
-  [[ -d "$d/MQL5" ]] && score=$((score + 1))
-  [[ -d "$d/config" || -d "$d/Config" ]] && score=$((score + 1))
-  # نشانه‌های پروفایل (کم‌وزن، چون پوشه‌ی مرده هم آن‌ها را دارد)
+  [[ -n "$mql" ]] && score=$((score + 1))
+  [[ -n "$(dir_ci "$d" config)" ]] && score=$((score + 1))
   [[ -f "$d/portable.txt" ]] && score=$((score + 1))
   [[ -f "$d/origin.txt" ]] && score=$((score + 1))
-  # لاگ ترمینال تازه = ترمینال همین‌جاست
-  [[ -n "$(find "$d/logs" -maxdepth 1 -type f -newermt '-30 minutes' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
+  [[ -n "$(dir_ci "$d" logs)" ]] && [[ -n "$(find "$(dir_ci "$d" logs)" -maxdepth 1 -type f -newermt '-30 minutes' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
   printf '%s' "$score"
 }
 
@@ -122,9 +126,9 @@ mkdir -p "$DATA_DIR" 2>/dev/null || true
 if [[ $LIST_SYMBOLS -eq 1 ]]; then
   echo "data dir: $DATA_ROOT"
   echo "--- history dirs (symbols already opened) ---"
-  find "$DATA_ROOT/bases" -maxdepth 3 -type d -path '*/history/*' -printf '%f\n' 2>/dev/null | sort -u | sed 's/^/  /'
+  find "$(dir_ci "$DATA_ROOT" bases)" -maxdepth 3 -type d -ipath '*/history/*' -printf '%f\n' 2>/dev/null | sort -u | sed 's/^/  /'
   echo "--- Market Watch (bases/*/symbols.sel) ---"
-  for sel in "$DATA_ROOT"/bases/*/symbols.sel; do
+  for sel in "$(dir_ci "$DATA_ROOT" bases)"/*/[Ss]ymbols.sel; do
     [[ -f "$sel" ]] || continue
     echo "  [$sel]"
     strings "$sel" 2>/dev/null | grep -E '^[A-Za-z][A-Za-z0-9._#-]{2,19}$' | grep -v -iE '^(sel|symbols|version|MetaQuotes)$' | sort -u | head -60 | sed 's/^/    /'
@@ -230,24 +234,24 @@ EXPLICIT=0
 # نماد چارت: اول از تاریخچه‌ی خود ترمینال (bases/<server>/history/<SYMBOL>),
 # چون نام‌گذاری بروکرها فرق دارد (BTCUSD / BTCUSD.a / XBTUSD ...).
 if [[ -z "$SYMBOL" ]]; then
-  BASES="$DATA_DIR/../bases"
+  BASES="$(dir_ci "$DATA_ROOT" bases)"
   HIST="$(find "$BASES" -maxdepth 3 -type d -path '*/history/*' 2>/dev/null)"
   if [[ -n "$HIST" ]]; then
     # نمادهایی که کاربر واقعاً باز کرده (تازه‌ترین اول)
-    SYMBOL="$(find "$BASES" -maxdepth 3 -type d -path '*/history/*' -printf '%T@ %f\n' 2>/dev/null \
+    SYMBOL="$(find "$BASES" -maxdepth 3 -type d -ipath '*/history/*' -printf '%T@ %f\n' 2>/dev/null \
               | sort -rn | awk '{print $2}' | head -n1)"
   fi
   # اگر چیزی نبود، طلا/بیت‌کوین/یورو را امتحان کن
-  if [[ -z "$SYMBOL" ]] || [[ ! -d "$BASES" ]]; then
-    for cand in XAUUSD XBTUSD BTCUSD EURUSD; do
-      if find "$BASES" -maxdepth 3 -type d -name "$cand" 2>/dev/null | grep -q .; then SYMBOL="$cand"; break; fi
+  if [[ -z "$SYMBOL" && -n "$BASES" ]]; then
+    for cand in XAUUSD XAUUSD_i XBTUSD BTCUSD EURUSD EURUSD_i; do
+      if find "$BASES" -maxdepth 4 -type d -iname "$cand" 2>/dev/null | grep -q .; then SYMBOL="$cand"; break; fi
     done
   fi
 fi
 # اگر تاریخچه‌ای نبود، از فهرست Market Watch ترمینال (symbols.sel) بخوان
 if [[ -z "$SYMBOL" ]]; then
   for cand in XAUUSD BTCUSD XBTUSD ETHUSD XAGUSD US30 EURUSD; do
-    if strings "$DATA_DIR/../bases"/*/symbols.sel 2>/dev/null | grep -qx -- "$cand"; then SYMBOL="$cand"; break; fi
+    if strings "$BASES"/*/[Ss]ymbols.sel 2>/dev/null | grep -qx -- "$cand"; then SYMBOL="$cand"; break; fi
   done
 fi
 LOGIN_NEEDED=0
@@ -261,7 +265,7 @@ ok "chart symbol: $SYMBOL"
 
 # فهرست نمادهای موجود در ترمینال (برای اینکه ببینی چه داری)
 log "symbols available in the terminal (history dirs):"
-find "$DATA_DIR/../bases" -maxdepth 3 -type d -path '*/history/*' -printf '   %f\n' 2>/dev/null \
+find "$BASES" -maxdepth 3 -type d -ipath '*/history/*' -printf '   %f\n' 2>/dev/null \
   | sort -u | head -30
 
 # ۵) Preset + startup.ini

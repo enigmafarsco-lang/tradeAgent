@@ -70,7 +70,10 @@ TERM_EXE="$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'terminal64.exe' 2
 [[ -n "$TERM_EXE" ]] || { bad "terminal64.exe not found"; exit 1; }
 
 bases_dir() {
-  find "$PREFIX/drive_c" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*/bases' 2>/dev/null | head -n1
+  # عادی (AppData) یا portable با نام Bases
+  { find "$PREFIX/drive_c" -maxdepth 12 -type d -ipath '*MetaQuotes/Terminal/*/bases' 2>/dev/null
+    find "$PREFIX/drive_c" -maxdepth 8 -type d -ipath '*/MetaTrader */Bases' 2>/dev/null
+  } | head -n1
 }
 
 logged_in() {
