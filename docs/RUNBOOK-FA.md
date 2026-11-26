@@ -122,3 +122,32 @@ systemctl --user start tradeagent-loop
 | چرا این معامله باز شد | لاگ (`var/logs/tradeagent.log`) + `last_intent:<SYM>` در جدول `meta` |
 | آمار هر نماد | بخش خلاصه / `per_symbol_stats` در `tradeagent status` |
 | سلامت داده | بخش ۵ گزارش + `status.json` اکسپرت |
+
+## چک‌لیست خواسته‌های اصلی (هر بار یک نگاه)
+
+```bash
+./scripts/verify_goals.sh
+```
+
+پنج شرط را چک می‌کند و PASS/WARN/FAIL می‌دهد:
+
+| # | شرط | معیار |
+|---|-----|-------|
+| ۱ | ضبط تیک زنده است | `status.json` با ضربان < ۱۸۰ ثانیه |
+| ۲ | تیک امروز نوشته می‌شود | وجود `ticks/<SYMBOL>/<YYYYMMDD>.csv` |
+| ۳ | گزارش هر ۵ دقیقه پوش می‌شود | آخرین کامیت شاخهٔ `reports` روی remote (< ۹۰۰ ثانیه) |
+| ۴ | فقط کاغذی | `paper.live_trading=false` و نبود هیچ فراخوانی ارسال سفارش |
+| ۵ | مدل زبانی | کلید Gemini یا Ollama محلی |
+
+خروج غیرصفر یعنی دست‌کم یک شرط FAIL شده است.
+
+## مدل زبانی: Gemini رایگان یا Ollama محلی
+
+```bash
+./scripts/setup_llm.sh --status          # الان چه چیزی فعال است؟
+./scripts/setup_llm.sh --gemini AIza...  # کلید Gemini را تست و در .env ثبت می‌کند
+./scripts/setup_llm.sh --ollama          # ollama + مدل پیش‌فرض را آماده می‌کند
+./scripts/setup_llm.sh --off             # فقط تصمیم قطعی
+```
+
+هر سه حالت فقط روی `.env` (که در گیت نیست) می‌نویسند؛ هیچ کلیدی در ریپو نمی‌رود.
