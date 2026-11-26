@@ -21,6 +21,7 @@ EA_SRC="$ROOT/mt5/Experts/TickHarvester.mq5"
 SYMBOL_ARG=""
 DATA_ARG=""
 DRY=0
+QUIET=0
 OUT_DIR="$ROOT/var/mt5"
 
 log()  { printf '\033[1;34m[attach]\033[0m %s\n' "$*"; }
@@ -33,13 +34,14 @@ while [[ $# -gt 0 ]]; do
     --symbol)   SYMBOL_ARG="$2"; shift 2 ;;
     --data-dir) DATA_ARG="$2"; shift 2 ;;
     --dry-run)  DRY=1; shift ;;
+    --quiet)    QUIET=1; shift ;;
     -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "گزینه ناشناخته: $1" ;;
+    *) die "unknown option: $1" ;;
   esac
 done
 
-[[ -f "$EA_SRC" ]] || die "اکسپرت پیدا نشد: $EA_SRC"
-[[ -d "$PREFIX/drive_c" ]] || die "prefix پیدا نشد: $PREFIX (با MT5_WINEPREFIX بده)"
+[[ -f "$EA_SRC" ]] || die "EA source not found: $EA_SRC"
+[[ -d "$PREFIX/drive_c" ]] || die "wine prefix not found: $PREFIX (set MT5_WINEPREFIX)"
 
 # ---------------------------------------------------------------------------
 # ۱) انتخاب ترمینال
@@ -90,19 +92,19 @@ if [[ -n "$DATA_ARG" ]]; then
   [[ "${DATA_ROOT##*/}" == "Files" ]] && DATA_ROOT="$(dirname "$(dirname "$DATA_ROOT")")"
   [[ "${DATA_ROOT##*/}" == "MQL5" ]] && DATA_ROOT="$(dirname "$DATA_ROOT")"
 else
-  log "جست‌وجوی پوشه‌ی داده‌ی MT5 (config/bases/terminal64.exe) ..."
-  while IFS= read -r d; do log "   کاندید: $d  (امتیاز $(score_dir "$d"))"; done < <(find_data_dirs)
+  log "scanning for MT5 data dirs (config/bases/terminal64.exe) ..."
+  while IFS= read -r d; do log "   candidate: $d  (score $(score_dir "$d"))"; done < <(find_data_dirs)
   DATA_ROOT="$(pick_data_dir)"
 fi
 
 if [[ -z "$DATA_ROOT" || ! -d "$DATA_ROOT" ]]; then
-  warn "هیچ پوشه‌ی داده‌ای پیدا نشد."
+  warn "no MT5 data dir found."
   find "$HOME" -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*' 2>/dev/null | sed 's/^/    /'
-  die "مسیر را دستی بده: --data-dir \"<...>/MetaQuotes/Terminal/<HASH>\""
+  die "pass it manually: --data-dir \"<...>/MetaQuotes/Terminal/<HASH>\""
 fi
 DATA_DIR="$DATA_ROOT/MQL5"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
-ok "پوشه‌ی داده: $DATA_ROOT"
+ok "data dir   : $DATA_ROOT"
 ok "MQL5       : $DATA_DIR"
 
 EXPERTS="$DATA_DIR/Experts"
@@ -114,18 +116,18 @@ mkdir -p "$EXPERTS" "$FILES/harvester" "$PRESETS" "$OUT_DIR" 2>/dev/null || true
 if [[ $DRY -eq 1 ]]; then
   echo "   + cp $EA_SRC $EXPERTS/TickHarvester.mq5"
 else
-  cp -f "$EA_SRC" "$EXPERTS/TickHarvester.mq5" || die "کپی اکسپرت نشد"
-  ok "اکسپرت کپی شد → $EXPERTS/TickHarvester.mq5"
+  cp -f "$EA_SRC" "$EXPERTS/TickHarvester.mq5" || die "could not copy the EA"
+  ok "EA copied -> $EXPERTS/TickHarvester.mq5"
 fi
 
 # ---------------------------------------------------------------------------
 # ۳) کامپایل با MetaEditor
 EDITOR="$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'metaeditor64.exe' 2>/dev/null | head -n1)"
 TERMINAL="$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'terminal64.exe' 2>/dev/null | head -n1)"
-[[ -n "$TERMINAL" ]] || die "terminal64.exe پیدا نشد."
+[[ -n "$TERMINAL" ]] || die "terminal64.exe not found."
 
 if [[ -z "$EDITOR" ]]; then
-  warn "MetaEditor64.exe پیدا نشد؛ کامپایل را دستی در MT5 با F7 بزن."
+  warn "metaeditor64.exe not found; compile manually in MT5 with F7."
 else
   # نکته‌ی مهم: MetaEditor مسیرِ دارای فاصله را در /compile: درست نمی‌گیرد
   # («Program Files»!). پس در پوشه‌ی بی‌فاصله کامپایل می‌کنیم و ex5 را برمی‌گردانیم.
@@ -136,14 +138,14 @@ else
     echo "   + cp $TMPC/TickHarvester.ex5 \"$EXPERTS/\""
   else
     rm -rf "$TMPC"; mkdir -p "$TMPC"
-    cp -f "$EXPERTS/TickHarvester.mq5" "$TMPC/" || warn "کپی فایل برای کامپایل نشد"
-    log "کامپایل در پوشه‌ی بی‌فاصله: $TMPC"
+    cp -f "$EXPERTS/TickHarvester.mq5" "$TMPC/" || warn "could not copy the file for compiling"
+    log "compiling in a space-free dir: $TMPC"
     ( cd "$TMPC" && timeout 180 wine "$EDITOR" /compile:TickHarvester.mq5 /log >/dev/null 2>&1 ) || true
     sleep 1
 
     # اگر آنجا هم نشد، یک بار در محل خودش (مسیر نسبی)
     if [[ ! -f "$TMPC/TickHarvester.ex5" ]]; then
-      log "تلاش دوم: کامپایل در محل، با مسیر نسبی"
+      log "second attempt: compile in place with a relative path"
       ( cd "$EXPERTS" && timeout 180 wine "$EDITOR" /compile:TickHarvester.mq5 /log >/dev/null 2>&1 ) || true
       sleep 1
       [[ -f "$EXPERTS/TickHarvester.ex5" ]] || cp -f "$TMPC/TickHarvester.ex5" "$EXPERTS/" 2>/dev/null || true
@@ -156,16 +158,16 @@ else
 
     for f in "$EXPERTS/TickHarvester.log" "$TMPC/TickHarvester.log"; do
       if [[ -f "$f" ]]; then
-        echo "--- گزارش کامپایلر ($f) ---"
+        echo "--- compiler log ($f) ---"
         grep -E "error|warning|Result:" "$f" | tail -n 12 || tail -n 8 "$f"
         break
       fi
     done
 
     if [[ -f "$EXPERTS/TickHarvester.ex5" ]]; then
-      ok "کامپایل شد → $EXPERTS/TickHarvester.ex5"
+      ok "compiled -> $EXPERTS/TickHarvester.ex5"
     else
-      warn "کامپایل خودکار نشد. دستی: در MT5 کلید F4 → فایل MQL5/Experts/TickHarvester.mq5 → F7"
+      warn "automatic compile failed. manually: F4 in MT5 -> MQL5/Experts/TickHarvester.mq5 -> F7"
     fi
   fi
 fi
@@ -199,13 +201,13 @@ if [[ -z "$SYMBOL" ]]; then
   done
 fi
 if [[ -z "$SYMBOL" ]]; then
-  warn "هیچ نمادی در ترمینال پیدا نشد (حساب لاگین نشده؟). EURUSD می‌گذارم."
+  warn "no symbol found in the terminal (not logged in?). Falling back to EURUSD."
   SYMBOL="EURUSD"
 fi
-ok "نماد چارت: $SYMBOL"
+ok "chart symbol: $SYMBOL"
 
 # فهرست نمادهای موجود در ترمینال (برای اینکه ببینی چه داری)
-log "نمادهای موجود در ترمینال (بازشده‌ها):"
+log "symbols available in the terminal:"
 find "$DATA_DIR/../bases" -maxdepth 3 -type d -path '*/history/*' -printf '   %f\n' 2>/dev/null \
   | sort -u | head -30
 
@@ -213,7 +215,7 @@ find "$DATA_DIR/../bases" -maxdepth 3 -type d -path '*/history/*' -printf '   %f
 SET_FILE="$PRESETS/TickHarvester.set"
 INI_FILE="$OUT_DIR/startup.ini"
 if [[ $DRY -eq 1 ]]; then
-  echo "   + نوشتن $SET_FILE و $INI_FILE"
+  echo "   + writing $SET_FILE and $INI_FILE"
 else
   if [[ $EXPLICIT -eq 1 ]]; then
     # نماد دستی: فقط همان
@@ -240,7 +242,7 @@ EOF
   fi
   mkdir -p "$OUT_DIR"
   cat > "$INI_FILE" <<EOF
-; تولیدشده توسط scripts/attach_harvester.sh
+; generated by scripts/attach_harvester.sh
 [StartUp]
 Symbol=$SYMBOL
 Period=M1
@@ -249,36 +251,38 @@ ExpertParameters=TickHarvester.set
 [Experts]
 Enabled=1
 EOF
-  ok "Preset → $SET_FILE"
-  ok "startup.ini → $INI_FILE"
+  ok "preset -> $SET_FILE"
+  ok "startup.ini -> $INI_FILE"
 fi
 
 WIN_INI="Z:${INI_FILE//\//\\}"
 WIN_TERM="Z:${TERMINAL//\//\\}"
+if [[ $QUIET -eq 0 ]]; then
 cat <<EOF
 
-────────────────────────────────────────────────────────────
-اجرای ترمینال با چارت $SYMBOL (M1) و اکسپرت متصل:
+------------------------------------------------------------
+Launch the terminal with the $SYMBOL (M1) chart and the EA attached:
 
-  # اگر ترمینال باز است، اول ببندش (File → Exit)
+  # close MT5 first if it is running (File -> Exit)
   wine "$TERMINAL" "/config:${WIN_INI}"
 
-یا معادلش با لانچر:
+or through the launcher:
 
   mt5 "/config:${WIN_INI}"
 
-بعد از باز شدن، روی چارت دنبال یک «:)» بالای سمت راست بگرد:
-  :)  = اکسپرت اجرا می‌شود   |   :(  = متوقف (AutoTrading خاموش)
+After it opens, look at the top-right corner of the chart:
+  :)  = EA is running      |   :(  = stopped (Algo Trading off)
 
-اگر :( بود: دکمه‌ی «Algo Trading» در نوار ابزار را روشن کن.
+If you see :(  -> click the "Algo Trading" button in the toolbar.
 
-تأیید ضبط (۱۵ ثانیه بعد):
+Verify recording (after 15s):
 
   ls "$FILES/harvester"; tail -3 "$FILES/harvester/status.json"
 
-سپس در ریشه‌ی ریپو:
+Then in the repo root:
 
   ./scripts/connect_harvester.sh
   .venv/bin/tradeagent doctor
-────────────────────────────────────────────────────────────
+------------------------------------------------------------
 EOF
+fi

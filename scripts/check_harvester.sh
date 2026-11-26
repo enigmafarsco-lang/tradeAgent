@@ -26,50 +26,50 @@ done < <({ find "$PREFIX/drive_c" -maxdepth 12 -type d -path '*MetaQuotes/Termin
            find "$PREFIX/drive_c" -maxdepth 8 -type d -name 'MetaTrader*' 2>/dev/null
          } | sort -u)
 
-[[ -n "$DATA_ROOT" ]] || { warn "پوشه‌ی داده پیدا نشد."; exit 1; }
+[[ -n "$DATA_ROOT" ]] || { warn "no MT5 data dir found."; exit 1; }
 MQL5="$DATA_ROOT/MQL5"
 FILES="$MQL5/Files"
 H="$FILES/harvester"
 
-log "داده‌ی MT5  : $DATA_ROOT"
-log "  محتوا     : $(ls -A "$DATA_ROOT" 2>/dev/null | tr '\n' ' ')"
-log "MQL5        : $MQL5  ($([[ -d "$MQL5" ]] && echo هست || echo 'نیست — ترمینال کامل init نشده'))"
-log "harvester   : $H  ($([[ -d "$H" ]] && echo هست || echo نیست))"
+log "MT5 data dir: $DATA_ROOT"
+log "  contents  : $(ls -A "$DATA_ROOT" 2>/dev/null | tr '\n' ' ')"
+log "MQL5        : $MQL5  ($([[ -d "$MQL5" ]] && echo yes || echo 'missing - terminal not initialised yet'))"
+log "harvester   : $H  ($([[ -d "$H" ]] && echo yes || echo no))"
 
 if [[ -d "$DATA_ROOT/logs" ]]; then
-  echo "--- ژورنال ترمینال (logs/) ---"
+  echo "--- terminal journal (logs/) ---"
   J="$(ls -t "$DATA_ROOT/logs" 2>/dev/null | head -n1)"
-  log "آخرین: $J"
+  log "latest: $J"
   grep -ai "error\|fail\|cannot\|denied" "$DATA_ROOT/logs/$J" 2>/dev/null | tail -n 10 | sed 's/^/    /'
-  echo "    ۱۵ خط آخر:"
+  echo "    last 15 lines:"
   tail -n 15 "$DATA_ROOT/logs/$J" 2>/dev/null | sed 's/^/    /'
 else
-  warn "پوشه‌ی logs/ نیست → ترمینال هرگز به‌طور کامل بالا نیامده."
+  warn "no logs/ dir -> the terminal never fully started."
 fi
 
-echo "--- لاگ‌های متاتریدر (MQL5/Logs) ---"
+echo "--- EA logs (MQL5/Logs) ---"
 LOGS="$MQL5/Logs"
 if [[ -d "$LOGS" ]]; then
   NEWEST="$(ls -t "$LOGS" 2>/dev/null | head -n1)"
-  log "آخرین فایل لاگ: $NEWEST"
+  log "latest log: $NEWEST"
   grep -ai "harvester\|expert\|error\|cannot" "$LOGS/$NEWEST" 2>/dev/null | tail -n 20 | sed 's/^/    /'
-  echo "--- ۱۵ خط آخر لاگ ---"
+  echo "--- last 15 log lines ---"
   tail -n 15 "$LOGS/$NEWEST" 2>/dev/null | sed 's/^/    /'
 else
-  warn "MQL5/Logs نیست — طبیعی است تا اولین اجرای اکسپرت/متاادیتور. (ژورنال ترمینال در logs/ بالاست)"
-  echo "--- فرآیند ترمینال در حال اجرا ---"
+  warn "no MQL5/Logs yet - normal until the EA or MetaEditor runs once"
+  echo "--- running terminal process ---"
   PID="$(pgrep -f 'terminal64\.exe' | head -n1)"
   if [[ -n "$PID" ]]; then
     log "pid=$PID"
     tr '\0' '\n' < "/proc/$PID/environ" 2>/dev/null | grep -E '^(WINEPREFIX|WINEARCH|DISPLAY|WAYLAND_DISPLAY|HOME)=' | sed 's/^/    /'
-    log "فایل اجرایی: $(readlink -f "/proc/$PID/exe" 2>/dev/null)"
+    log "executable: $(readlink -f "/proc/$PID/exe" 2>/dev/null)"
   else
-    warn "ترمینال در حال اجرا نیست."
+    warn "terminal is not running."
   fi
-  echo "--- پوشه‌های MetaQuotes موجود ---"
+  echo "--- MetaQuotes dirs ---"
   find "$PREFIX" "$HOME/.wine" -maxdepth 14 -type d -path '*MetaQuotes*' 2>/dev/null | sed 's/^/    /'
-  echo "--- هر status.json در سیستم ---"
+  echo "--- any harvester status.json ---"
   find "$PREFIX" "$HOME/.wine" -maxdepth 16 -name status.json -path '*harvester*' 2>/dev/null | sed 's/^/    /'
-  echo "--- هر Logs زیر MQL5 ---"
+  echo "--- any MQL5/Logs ---"
   find "$PREFIX" "$HOME/.wine" -maxdepth 16 -type d -path '*MQL5/Logs' 2>/dev/null | sed 's/^/    /'
 fi

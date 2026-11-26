@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
     --no-start) DO_START=0; shift ;;
     --uninstall) ACTION=uninstall; shift ;;
     -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "گزینه ناشناخته: $1" >&2; exit 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -31,12 +31,12 @@ if [[ "$ACTION" == uninstall ]]; then
   systemctl --user disable --now tradeagent-loop.service 2>/dev/null || true
   rm -f "$UNIT"
   systemctl --user daemon-reload 2>/dev/null || true
-  log "سرویس حذف شد."
+  log "service removed."
   exit 0
 fi
 
 [[ -x "$ROOT/.venv/bin/tradeagent" ]] || {
-  echo "venv آماده نیست: $ROOT/.venv/bin/tradeagent" >&2
+  echo "venv not ready: $ROOT/.venv/bin/tradeagent" >&2
   echo "  python3 -m venv .venv && .venv/bin/pip install -e \".[dev]\"" >&2
   exit 1
 }
@@ -44,7 +44,7 @@ fi
 mkdir -p "$UNIT_DIR" "$ROOT/var/logs"
 if [[ ! -f "$ROOT/.env" ]]; then
   cp "$ROOT/.env.example" "$ROOT/.env"
-  log ".env از .env.example ساخته شد → کلید Gemini را پر کن (اختیاری؛ بدون آن هم کار می‌کند)"
+  log ".env created from .env.example (optional: fill GEMINI_API_KEY)"
 fi
 
 CONFIG_ARG=""
@@ -52,7 +52,7 @@ CONFIG_ARG=""
 
 cat > "$UNIT" <<EOF
 [Unit]
-Description=TradeAgent — حلقه‌ی کاغذی ${INTERVAL}s با گزارش گیت
+Description=TradeAgent paper loop (${INTERVAL}s) with git report publishing
 Documentation=file://$ROOT/docs/RUNBOOK-FA.md
 After=network-online.target
 Wants=network-online.target
@@ -73,16 +73,16 @@ PrivateTmp=true
 WantedBy=default.target
 EOF
 
-log "unit نوشته شد: $UNIT"
+log "unit written: $UNIT"
 systemctl --user daemon-reload
-loginctl enable-linger "$USER" 2>/dev/null && log "linger فعال شد (سرویس بعد از logout هم می‌ماند)" || log "enable-linger نشد؛ سرویس فقط تا logout زنده است"
+loginctl enable-linger "$USER" 2>/dev/null && log "linger enabled (service survives logout)" || log "enable-linger failed; service lives until logout only"
 
 if [[ $DO_START -eq 1 ]]; then
   systemctl --user enable --now tradeagent-loop.service
   sleep 2
   systemctl --user --no-pager status tradeagent-loop.service | head -12 || true
   echo
-  log "لاگ زنده: journalctl --user -u tradeagent-loop.service -f"
+  log "live log: journalctl --user -u tradeagent-loop.service -f"
 else
-  log "فعال‌سازی رد شد (--no-start). بعداً: systemctl --user enable --now tradeagent-loop.service"
+  log "not started (--no-start). later: systemctl --user enable --now tradeagent-loop.service"
 fi

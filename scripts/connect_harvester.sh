@@ -35,28 +35,28 @@ pick_files_dir() {
 
 FILES="${1:-}"
 if [[ -z "$FILES" ]]; then
-  log "جست‌وجوی MQL5/Files در $PREFIX ..."
+  log "scanning for MQL5/Files in $PREFIX ..."
   ALL="$(find "$PREFIX/drive_c" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null || true)"
   if [[ -n "$ALL" ]]; then
-    while IFS= read -r d; do log "   نامزد: $d"; done <<< "$ALL"
+    while IFS= read -r d; do log "   candidate: $d"; done <<< "$ALL"
   fi
   FILES="$(pick_files_dir)"
-  [[ -n "$FILES" ]] && log "انتخاب شد: $FILES"
+  [[ -n "$FILES" ]] && log "selected: $FILES"
 fi
-[[ -n "$FILES" ]] || die "MQL5/Files پیدا نشد. یک بار MT5 را باز کن یا مسیر را دستی بده."
-[[ -d "$FILES" ]] || die "مسیر وجود ندارد: $FILES"
+[[ -n "$FILES" ]] || die "MQL5/Files not found. Open MT5 once or pass the path manually."
+[[ -d "$FILES" ]] || die "path does not exist: $FILES"
 
 HARVESTER="$FILES/harvester"
 log "MQL5/Files : $FILES"
-log "داده‌ی تیک : $HARVESTER"
+log "tick data : $HARVESTER"
 if [[ ! -d "$HARVESTER" ]]; then
-  warn "پوشه‌ی harvester ساخته نشده — یعنی اکسپرت هنوز اجرا نشده. پوشه را می‌سازم؛"
-  warn "بعد از اجرای اکسپرت روی چارت، دوباره doctor را بزن."
+  warn "harvester/ does not exist yet - the EA has not run. Creating it."
+  warn "after the EA runs on a chart, run doctor again."
   mkdir -p "$HARVESTER"
 fi
 
 if [[ ! -f "$CONFIG" ]]; then
-  log "configs/local.toml نبود؛ از پیش‌فرض ساخته می‌شود."
+  log "configs/local.toml missing; creating it from defaults."
   cp "$ROOT/configs/default.toml" "$CONFIG"
 fi
 
@@ -92,21 +92,21 @@ config_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 data = tomllib.loads(config_path.read_text(encoding="utf-8"))
 got = data.get("data", {}).get("harvester_dir")
 if got != value:
-    raise SystemExit(f"نوشتن مسیر ناموفق بود: {got!r} != {value!r}")
+    raise SystemExit(f"failed to write the path: {got!r} != {value!r}")
 print(f'OK: data.harvester_dir = "{got}"')
 PY
 
 cat <<EOF
 
-────────────────────────────────────────────────────────────
-مسیر داده ثبت شد. قدم‌های بعدی:
+------------------------------------------------------------
+Data path saved. Next steps:
 
   cd "$ROOT"
   .venv/bin/tradeagent doctor
   .venv/bin/tradeagent cycle --no-publish
   .venv/bin/tradeagent report --cat | head -60
 
-اگر doctor گفت «status.json تازه پیدا نشد»: اکسپرت روی چارت اجرا نشده
-یا دکمه‌ی AutoTrading سبز نیست.
-────────────────────────────────────────────────────────────
+If doctor says "status.json is stale": the EA is not running on a chart
+or the AutoTrading button is off.
+------------------------------------------------------------
 EOF

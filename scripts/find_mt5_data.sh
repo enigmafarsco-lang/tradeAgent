@@ -3,12 +3,12 @@
 set -uo pipefail
 
 PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
-echo "prefix فعال: $PREFIX"
-echo "جست‌وجو در: $PREFIX، ~/.wine، ~/Wine*، /mnt/c/Users ..."
+echo "active prefix: $PREFIX"
+echo "searching: $PREFIX, ~/.wine, ~/Wine*, /mnt/c/Users ..."
 # همه‌ی prefixهای ممکن را هم ببین (اگر قبلاً جای دیگری نصب شده)
 for extra in "$HOME"/Wine*/drive_c "$HOME"/.wine/drive_c; do
   [[ -d "$extra" ]] || continue
-  echo "  prefix پیدا شد: ${extra%/drive_c}"
+  echo "  prefix found: ${extra%/drive_c}"
 done
 
 search_roots=("$PREFIX" "$HOME/.wine" "$HOME" "/mnt/c/Users")
@@ -23,17 +23,17 @@ for root in "${search_roots[@]}"; do
     echo "Experts    : $(dirname "$dir")/Experts"
     echo "has harvester dir: $([[ -d "$dir/harvester" ]] && echo yes || echo no)"
     echo "tick symbols today: $(find "$dir/harvester/ticks" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
-    echo "status.json age  : $([[ -f "$dir/harvester/status.json" ]] && stat -c '%y' "$dir/harvester/status.json" || echo 'ندارد')"
+    echo "status.json age  : $([[ -f "$dir/harvester/status.json" ]] && stat -c '%y' "$dir/harvester/status.json" || echo 'none')"
   done < <(find "$root" -maxdepth 9 -type d -path '*MQL5/Files' 2>/dev/null | head -n 20)
 done
 
 if [[ $found -eq 0 ]]; then
-  echo "هیچ MQL5/Files پیدا نشد."
-  echo "اگر MT5 را روی ویندوز دیگری داری، پوشه را share کن یا با rsync منتقل کن."
+  echo "no MQL5/Files found."
+  echo "if MT5 runs on another Windows machine, share or rsync the folder here."
   exit 1
 fi
 
 echo
-echo "این مسیر را در configs/local.toml بگذار:"
+echo "put this path in configs/local.toml:"
 echo "  [data]"
 echo "  harvester_dir = \"<MQL5/Files>/harvester\""
