@@ -5,6 +5,52 @@
 
 ---
 
+## پیش‌فرض این پروژه: همه‌چیز در `~/Wine`
+
+```
+/usr/bin/wine                     ← خود Wine (از apt، نیازمند sudo، سیستم‌wide)
+~/Wine                            ← WINEPREFIX؛ «محیط ویندوزی» تو
+~/Wine/drive_c/Program Files/MetaTrader 5/              ← ترمینال MT5
+~/Wine/drive_c/users/$USER/AppData/Roaming/MetaQuotes/Terminal/<HASH>/MQL5/Files/
+                                                        ← داده‌ی تیک و اکسپرت
+```
+
+یعنی نصب Wine سیستم‌wide است، ولی **هیچ فایل شخصی/داده‌ای بیرون از `~/Wine` نوشته
+نمی‌شود**. برای اینکه مسیر دیگری بخواهی، همه‌ی اسکریپت‌ها این متغیر را می‌خوانند:
+
+```bash
+export MT5_WINEPREFIX="$HOME/WineMT5"     # یا هر مسیر دیگر
+```
+
+فقط این را در `~/.bashrc` بگذار تا `install_mt5_wine.sh`، `compile_harvester.sh`،
+`find_mt5_data.sh` و `connect_harvester.sh` هم همان را ببینند.
+
+### اگر از قبل در مسیر دیگری نصب کرده‌ای
+
+```bash
+mv ~/.mt5-wine64 ~/Wine        # انتقال prefix؛ محتوای drive_c نسبی است و سالم می‌ماند
+sed -i 's|\.mt5-wine64|Wine|g' ~/.bashrc
+source ~/.bashrc
+mt5                            # لانچر جدید (یا دوباره گام ۷ راهنما)
+```
+
+### «می‌خواهم خود Wine هم داخل ~/Wine باشد»
+
+شدنی است ولی **توصیه نمی‌شود** و این پروژه تستش نکرده: Wine به کتابخانه‌های
+سیستمی (freetype، fontconfig، libx11، Vulkan/OpenGL، و برای بخش ۳۲بیتی multiarch)
+وابسته است که بدون root نصب نمی‌شوند. مسیرهای واقع‌بینانه:
+
+| گزینه | نتیجه |
+|---|---|
+| `apt` + prefix در `~/Wine` (پیش‌فرض ما) | پایدارترین؛ تنها چیزی که تست شده |
+| Bottles / Flatpak (`flatpak install flathub com.usebottles.bottles`) | Wine داخل سندباکس خودش، داده در `~/.var/app/...` |
+| استخراج دستی بسته‌های WineHQ در `~/Wine/runtime` | شکننده؛ MT5 x64 معمولاً بالا می‌آید ولی آپدیت/وابستگی دستی است |
+
+اگر گزینه‌ی سوم را واقعاً می‌خواهی، بگو تا اسکریپت اختصاصی‌اش را برای همان
+نسخه‌ی اوبونتوت بنویسم؛ ولی برای این پروژه `apt` + `~/Wine` انتخاب درست است.
+
+---
+
 ## مسیر A — Linux (Ubuntu 22.04/24.04، Debian 12) با Wine
 
 ```bash
@@ -18,7 +64,7 @@ cd tradeAgent
 1. `winehq-stable` + `winetricks` را از مخزن رسمی WineHQ نصب می‌کند
    (روی دبیان، `deb https://dl.winehq.org/wine-builds/debian/` — اگر آدرس توزیعت
    فرق داشت، `DISTRO_ID`/`DISTRO_CODENAME` را در فایل دستی اصلاح کن).
-2. prefix تمیز `~/.mt5-wine64` می‌سازد، `corefonts` و `vcrun2019` را نصب می‌کند.
+2. prefix تمیز `~/Wine` می‌سازد، `corefonts` و `vcrun2019` را نصب می‌کند.
 3. نصب‌کننده‌ی MT5 را دانلود و با `/auto` نصب می‌کند.
 4. اکسپرت را در `MQL5/Experts` کپی و پوشه‌ی `MQL5/Files/harvester` را می‌سازد.
 5. لانچر `~/.local/bin/mt5` را می‌سازد.

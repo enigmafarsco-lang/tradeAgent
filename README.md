@@ -71,9 +71,10 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 # ۲) اکسپرت را در MT5 کامپایل و روی یک چارت اجرا کن (F7 + Allow Algo Trading)
 ./scripts/compile_harvester.sh
 
-# ۳) مسیر داده را پیدا و در پیکربندی بگذار
+# ۳) مسیر داده را پیدا و در پیکربندی بگذار (پیش‌فرض prefix: ~/Wine)
 ./scripts/find_mt5_data.sh
-#    [data] harvester_dir = "/home/you/.mt5-wine64/drive_c/.../MQL5/Files/harvester"
+./scripts/connect_harvester.sh
+#    [data] harvester_dir = "/home/you/Wine/drive_c/.../MQL5/Files/harvester"
 
 # ۴) سلامت
 .venv/bin/tradeagent doctor

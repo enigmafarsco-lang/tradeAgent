@@ -2,7 +2,7 @@
 # کامپایل اکسپرت با MetaEditor از خط فرمان (زیر Wine) و نمایش نتیجه
 set -uo pipefail
 
-PREFIX="${MT5_WINEPREFIX:-$HOME/.mt5-wine64}"
+PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
 export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
 

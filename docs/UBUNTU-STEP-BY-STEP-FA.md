@@ -188,10 +188,10 @@ wine --version
 
 ---
 
-## گام ۶ — ساخت محیط ویندوزی (prefix) و کتابخانه‌ها
+## گام ۶ — ساخت محیط ویندوزی (prefix) در `~/Wine`
 
 ```bash
-export WINEPREFIX="$HOME/.mt5-wine64"
+export WINEPREFIX="$HOME/Wine"
 export WINEARCH=win64
 
 wineboot --init
@@ -209,13 +209,20 @@ winetricks -q vcrun2019
 و کتابخانه‌های VC++ نصب می‌شوند. اگر `vcrun2019` گیر کرد، `winetricks -q vcrun2019`
 را دوباره بزن یا `winetricks vcrun2022` را امتحان کن.
 
+**همه‌چیز اینجا مینشیند:** `~/Wine/drive_c/Program Files/MetaTrader 5` (خود ترمینال)،
+`~/Wine/drive_c/users/$USER/AppData/Roaming/MetaQuotes/Terminal/<HASH>/MQL5/Files`
+(داده‌ی تیک). خودِ برنامه‌ی `wine` از `apt` در `/usr` است — این طبیعی است.
+
+می‌خواهی مسیر دیگری باشد؟ قبل از این گام `export MT5_WINEPREFIX="$HOME/WineMT5"` بگذار
+(و در `~/.bashrc` هم ذخیره کن)؛ همه‌ی اسکریپت‌ها همان را می‌بینند.
+
 این دو خط را دائمی کن (تا هر ترمینال جدید همان prefix را ببیند):
 
 ```bash
 cat >> ~/.bashrc <<'EOF'
 
 # MetaTrader 5 (Wine)
-export WINEPREFIX="$HOME/.mt5-wine64"
+export WINEPREFIX="$HOME/Wine"
 export WINEARCH=win64
 EOF
 source ~/.bashrc
@@ -250,13 +257,13 @@ find "$WINEPREFIX/drive_c" -iname 'terminal64.exe' 2>/dev/null
 ```
 
 **باید ببینی:** مسیری مثل
-`/home/you/.mt5-wine64/drive_c/Program Files/MetaTrader 5/terminal64.exe`
+`/home/you/Wine/drive_c/Program Files/MetaTrader 5/terminal64.exe`
 
 ```bash
 mkdir -p ~/.local/bin
 cat > ~/.local/bin/mt5 <<'EOF'
 #!/usr/bin/env bash
-export WINEPREFIX="$HOME/.mt5-wine64"
+export WINEPREFIX="$HOME/Wine"
 export WINEARCH=win64
 exec wine "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/terminal64.exe" "$@"
 EOF
@@ -360,12 +367,22 @@ tail -3 "$FILES/harvester"/ticks/*/*.csv | head -12
 
 ```bash
 cd ~/projects/tradeAgent
-FILES="$(find "$WINEPREFIX/drive_c" -type d -path '*MQL5/Files' | head -n1)"
-
 .venv/bin/tradeagent init
+./scripts/connect_harvester.sh
+```
+
+اسکریپت خودش `MQL5/Files` را زیر `~/Wine` پیدا می‌کند، مسیر را در
+`configs/local.toml` می‌نویسد و فایل را دوباره اعتبارسنجی می‌کند.
+
+<details>
+<summary>معادل دستی (اگر اسکریپت را نمی‌خواهی)</summary>
+
+```bash
+FILES="$(find "$WINEPREFIX/drive_c" -type d -path '*MQL5/Files' | head -n1)"
 sed -i "s|^harvester_dir = .*|harvester_dir = \"$FILES/harvester\"|" configs/local.toml
 grep -n 'harvester_dir' configs/local.toml
 ```
+</details>
 
 **باید ببینی:** یک خط با مسیر واقعی `.../MQL5/Files/harvester`.
 

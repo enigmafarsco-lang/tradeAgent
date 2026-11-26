@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-PREFIX="${MT5_WINEPREFIX:-$HOME/.mt5-wine64}"
+PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
 INSTALLER_URL="${MT5_INSTALLER_URL:-https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe}"
 INSTALLER_FILE=""
 DRY_RUN=0
@@ -111,6 +111,11 @@ log "۳/۶ ساخت prefix تمیز Wine در $PREFIX"
 export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
 run mkdir -p "$PREFIX"
+if [[ -d "$PREFIX/drive_c" ]]; then
+  log "prefix از قبل وجود دارد؛ wineboot فقط یکپارچه‌سازی می‌کند (چیزی پاک نمی‌شود)."
+elif [[ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]]; then
+  die "$PREFIX خالی نیست ولی prefix واین هم نیست. یک پوشه‌ی خالی بده: --prefix ~/WineMT5"
+fi
 run wineboot --init
 if [[ $DRY_RUN -eq 0 ]]; then
   sleep 3

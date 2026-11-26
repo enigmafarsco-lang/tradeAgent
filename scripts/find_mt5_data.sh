@@ -2,8 +2,14 @@
 # پیدا کردن پوشه‌ی MQL5/Files ترمینال‌های MT5 (Wine، ویندوز با WSL، یا مسیر دستی)
 set -uo pipefail
 
-PREFIX="${MT5_WINEPREFIX:-$HOME/.mt5-wine64}"
-echo "جست‌وجو در: $PREFIX و مسیرهای رایج..."
+PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
+echo "prefix فعال: $PREFIX"
+echo "جست‌وجو در: $PREFIX، ~/.wine، ~/Wine*، /mnt/c/Users ..."
+# همه‌ی prefixهای ممکن را هم ببین (اگر قبلاً جای دیگری نصب شده)
+for extra in "$HOME"/Wine*/drive_c "$HOME"/.wine/drive_c; do
+  [[ -d "$extra" ]] || continue
+  echo "  prefix پیدا شد: ${extra%/drive_c}"
+done
 
 search_roots=("$PREFIX" "$HOME/.wine" "$HOME" "/mnt/c/Users")
 found=0
