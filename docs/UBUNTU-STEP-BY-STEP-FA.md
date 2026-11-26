@@ -374,6 +374,19 @@ mt5
 
 **باید ببینی:** `کامپایل شد → .../Experts/TickHarvester.ex5`
 
+اگر گفت «هیچ MQL5 پیدا نشد»، یعنی ترمینال داده‌اش را در prefix دیگری نوشته
+(مثلاً `~/.wine` چون آن بار `WINEPREFIX` ست نبوده). مسیر را پیدا کن:
+
+```bash
+find ~ -maxdepth 12 -type d -path '*MetaQuotes/Terminal/*/MQL5' 2>/dev/null
+```
+
+و با همان بده:
+
+```bash
+./scripts/attach_harvester.sh --data-dir "/home/USER/.wine/drive_c/users/USER/AppData/Roaming/MetaQuotes/Terminal/<HASH>/MQL5"
+```
+
 اگر `ex5` ساخته نشد: در ترمینال `F4` (MetaEditor) → فایل را باز کن → `F7` →
 پایین پنجره باید `0 errors, 0 warnings` بدهد.
 
