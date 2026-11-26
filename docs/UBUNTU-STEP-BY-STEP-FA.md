@@ -233,7 +233,7 @@ sudo apt install -y --install-recommends winehq-stable winetricks
 wine --version
 ```
 
-**باید ببینی:** `wine-9.x` یا `wine-10.x`.
+**باید ببینی:** `wine-9.x` / `wine-10.x` / `wine-11.x` (نسخه‌ی ۱۱ هم تست‌شده است).
 
 **اگر خطا:**
 - `Unable to locate package winehq-stable` → مخزن برای نسخه‌ی تو نیست؛ جایگزین:
