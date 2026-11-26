@@ -153,6 +153,54 @@ report_failure() {
   return 0
 }
 
+interactive() {
+  local k usable=0
+  k="$(env_get GEMINI_API_KEY)"
+  [[ -n "$k" ]] && [[ -z "$(not_a_key_reason "$(sanitize "$k")")" ]] && usable=1
+
+  if (( usable )); then
+    echo "stored key: $(mask "$(sanitize "$k")")"
+    gemini_probe "$(sanitize "$k")"
+    case $? in
+      0) ok "works with $GEMINI_MODEL_OK - nothing to do"
+         echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
+         return 0 ;;
+      1) report_failure "the stored key was rejected"; dim "paste a fresh one below" ;;
+      2) warn "network: generativelanguage.googleapis.com is not reachable from here" ;;
+      *) report_failure "unexpected answer" ;;
+    esac
+  fi
+
+  if ollama_up && curl -s "$OLLAMA_URL/api/tags" | grep -q '"name"'; then
+    ok "a local Ollama server is running at $OLLAMA_URL"
+  fi
+
+  echo
+  printf '\033[1m[llm] paste your Gemini key and press Enter (hidden): \033[0m'
+  local typed
+  read -rs typed
+  echo
+
+  if [[ -z "$typed" ]]; then
+    if command -v ollama >/dev/null && ollama_up; then
+      warn "no key given -> using the local Ollama that is already running"
+      local m; m="$(curl -s "$OLLAMA_URL/api/tags" | grep -o '\"name\":\"[^\"]*' | head -n1 | cut -d'"' -f4)"
+      set_env TRADEAGENT_LLM_PROVIDER ollama
+      set_env TRADEAGENT_OLLAMA_MODEL "${m:-$DEFAULT_OLLAMA}"
+      ok "provider=ollama model=${m:-$DEFAULT_OLLAMA}"
+      return 0
+    fi
+    printf '[llm] nothing typed. install the local model instead? [y/N] '
+    local a; read -r a
+    if [[ "${a:-n}" =~ ^[Yy]$ ]]; then
+      exec "$0" --install-ollama
+    fi
+    warn "left as is: cycles keep running with deterministic decisions"
+    return 1
+  fi
+  do_gemini "$typed"
+}
+
 script_version() {
   git -C "$ROOT" log -1 --format=%h -- scripts/setup_llm.sh 2>/dev/null || echo unknown
 }
@@ -238,13 +286,19 @@ do_gemini() {
 }
 
 case "${1:-}" in
-  --status|"") status ;;
+  --status) status ;;
+  "") interactive ;;
 
   --gemini) shift; do_gemini "$@" ;;
 
   --diagnose)
-    k="$(env_get GEMINI_API_KEY)"
-    [[ -n "$k" ]] || { bad "no key stored in .env"; exit 1; }
+    shift
+    if [[ -n "${1:-}" ]]; then k="$1"
+    else k="$(env_get GEMINI_API_KEY)"; fi
+    if [[ -z "$k" ]]; then
+      printf '[llm] no key stored. paste it (hidden): '; read -rs k; echo
+    fi
+    [[ -n "$k" ]] || { bad "no key given"; exit 1; }
     clean="$(sanitize "$k")"
     echo "key         : $(mask "$clean")"
     echo "shape ok?   : $([[ -z "$(not_a_key_reason "$clean")" ]] && echo yes || echo "no ($(not_a_key_reason "$clean"))")"
