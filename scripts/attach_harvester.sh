@@ -120,27 +120,49 @@ TERMINAL="$(find "$PREFIX/drive_c" -maxdepth 8 -type f -iname 'terminal64.exe' 2
 if [[ -z "$EDITOR" ]]; then
   warn "MetaEditor64.exe پیدا نشد؛ کامپایل را دستی در MT5 با F7 بزن."
 else
-  WIN_MQ5="Z:${EXPERTS//\//\\}\\TickHarvester.mq5"
+  # نکته‌ی مهم: MetaEditor مسیرِ دارای فاصله را در /compile: درست نمی‌گیرد
+  # («Program Files»!). پس در پوشه‌ی بی‌فاصله کامپایل می‌کنیم و ex5 را برمی‌گردانیم.
+  # اکسپرت هیچ #include ندارد، پس جابه‌جا کردنش بی‌خطر است.
+  TMPC="${TMPDIR:-/tmp}/tradeagent-compile"
   if [[ $DRY -eq 1 ]]; then
-    echo "   + wine \"$EDITOR\" /compile:\"$WIN_MQ5\" /log"
+    echo "   + cp \"$EXPERTS/TickHarvester.mq5\" $TMPC/ && (cd $TMPC && wine \"$EDITOR\" /compile:TickHarvester.mq5 /log)"
+    echo "   + cp $TMPC/TickHarvester.ex5 \"$EXPERTS/\""
   else
-    log "کامپایل: $WIN_MQ5"
-    timeout 180 wine "$EDITOR" "/compile:${WIN_MQ5}" /log >/dev/null 2>&1 || warn "MetaEditor با کد غیرصفر برگشت (اغلب بی‌خطر است)."
+    rm -rf "$TMPC"; mkdir -p "$TMPC"
+    cp -f "$EXPERTS/TickHarvester.mq5" "$TMPC/" || warn "کپی فایل برای کامپایل نشد"
+    log "کامپایل در پوشه‌ی بی‌فاصله: $TMPC"
+    ( cd "$TMPC" && timeout 180 wine "$EDITOR" /compile:TickHarvester.mq5 /log >/dev/null 2>&1 ) || true
     sleep 1
-    LOGF="$EXPERTS/TickHarvester.log"
-    if [[ -f "$LOGF" ]]; then
-      echo "--- گزارش کامپایلر ---"
-      tail -n 12 "$LOGF"
+
+    # اگر آنجا هم نشد، یک بار در محل خودش (مسیر نسبی)
+    if [[ ! -f "$TMPC/TickHarvester.ex5" ]]; then
+      log "تلاش دوم: کامپایل در محل، با مسیر نسبی"
+      ( cd "$EXPERTS" && timeout 180 wine "$EDITOR" /compile:TickHarvester.mq5 /log >/dev/null 2>&1 ) || true
+      sleep 1
+      [[ -f "$EXPERTS/TickHarvester.ex5" ]] || cp -f "$TMPC/TickHarvester.ex5" "$EXPERTS/" 2>/dev/null || true
     fi
+
+    if [[ -f "$TMPC/TickHarvester.ex5" ]]; then
+      cp -f "$TMPC/TickHarvester.ex5" "$EXPERTS/TickHarvester.ex5"
+      [[ -f "$TMPC/TickHarvester.log" ]] && cp -f "$TMPC/TickHarvester.log" "$EXPERTS/TickHarvester.log"
+    fi
+
+    for f in "$EXPERTS/TickHarvester.log" "$TMPC/TickHarvester.log"; do
+      if [[ -f "$f" ]]; then
+        echo "--- گزارش کامپایلر ($f) ---"
+        grep -E "error|warning|Result:" "$f" | tail -n 12 || tail -n 8 "$f"
+        break
+      fi
+    done
+
     if [[ -f "$EXPERTS/TickHarvester.ex5" ]]; then
       ok "کامپایل شد → $EXPERTS/TickHarvester.ex5"
     else
-      warn "TickHarvester.ex5 ساخته نشد. در MT5 → F4 → فایل را باز کن و F7 بزن."
+      warn "کامپایل خودکار نشد. دستی: در MT5 کلید F4 → فایل MQL5/Experts/TickHarvester.mq5 → F7"
     fi
   fi
 fi
 
-# ---------------------------------------------------------------------------
 # ۴) انتخاب نماد
 SYMBOL="$SYMBOL_ARG"
 if [[ -z "$SYMBOL" ]]; then
