@@ -254,12 +254,13 @@ interactive() {
 
   # ۰) اگر انتخاب فعلی ollama است و جواب می‌دهد، همین کافی است
   if [[ "$provider" == "ollama" ]] && command -v ollama >/dev/null; then
-    if om_out="$(ollama_probe "$om")"; then
-      ok "local model works: $om  ->  $om_out"
+    local prc; ollama_probe "$om"; prc=$?
+    if (( prc == 0 )); then
+      ok "local model works: $om  ->  $OLLAMA_ANS"
       echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
       return 0
     fi
-    warn "provider is ollama but $om did not answer"
+    warn "provider is ollama but $om did not answer: ${OLLAMA_ERR:-unknown}"
   fi
 
   # ۱) گوگل
@@ -290,19 +291,30 @@ interactive() {
     fi
     if ollama_up; then
       # مدلی که در .env است، وگرنه هر مدلی که نصب است
-      local try_models="$om $(ollama_models | tr '\n' ' ')"
+      local try_models
+      try_models="$(printf '%s\n' "$om" $(ollama_models) | awk 'NF && !seen[$0]++')"
       for cand in $try_models; do
         [[ -z "$cand" ]] && continue
-        if out="$(ollama_probe "$cand")"; then
+        ollama_probe "$cand"
+        if [[ $? -eq 0 ]]; then
           set_env TRADEAGENT_LLM_PROVIDER ollama
           set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
           set_env TRADEAGENT_OLLAMA_MODEL "$cand"
-          ok "switched to the local model: $cand  ->  $out"
+          ok "switched to the local model: $cand  ->  $OLLAMA_ANS"
           ok "now: systemctl --user restart tradeagent-loop.service"
           return 0
         fi
       done
-      warn "ollama is running but no installed model answered"
+      if ollama_models | grep -qx "$om"; then
+        set_env TRADEAGENT_LLM_PROVIDER ollama
+        set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
+        set_env TRADEAGENT_OLLAMA_MODEL "$om"
+        warn "$om is installed but the test call failed (${OLLAMA_ERR:-unknown}) - selecting it anyway"
+        dim "the loop falls back to deterministic decisions whenever the model is slow or silent"
+        ok "now: systemctl --user restart tradeagent-loop.service"
+        return 0
+      fi
+      warn "no installed model answered"
       dim "installed: $(ollama_models | tr '\n' ' ')"
     fi
   fi
@@ -342,26 +354,54 @@ try: d=json.load(sys.stdin)
 except Exception: sys.exit()
 for m in d.get("models",[]): print(m.get("name",""))' 2>/dev/null; }
 
-# 0 = پاسخ JSON سالم داد، 1 = سرور نیست، 2 = مدل نیست، 3 = پاسخ بی‌معنی
+# 0 = پاسخ JSON سالم (در OLLAMA_ANS)، 1 = سرور نیست، 2 = مدل نیست، 3 = خطای HTTP، 4 = پاسخ بی‌معنی
+# این‌ها متغیر جهانی‌اند تا در $(...) گم نشوند
+OLLAMA_ANS=""
+OLLAMA_ERR=""
 ollama_probe() {
-  local model="$1" body ans
-  ollama_up || return 1
-  ollama_models | grep -qx "$model" || return 2
-  body="$(curl -s --max-time 120 -H 'Content-Type: application/json' \
-    -d "{\"model\":\"$model\",\"stream\":false,\"format\":\"json\",\"options\":{\"temperature\":0},\"messages\":[{\"role\":\"user\",\"content\":\"Reply with JSON: {\\\"ok\\\":true} and nothing else.\"}]}" \
-    "$OLLAMA_URL/api/chat" 2>/dev/null)"
-  ans="$(printf '%s' "$body" | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit()
-c=(d.get("message") or {}).get("content","")
+  local model="$1" payload out code body
+  OLLAMA_ANS=""; OLLAMA_ERR=""
+  ollama_up || { OLLAMA_ERR="server is not reachable at $OLLAMA_URL"; return 1; }
+  ollama_models | grep -qx "$model" || { OLLAMA_ERR="model '$model' is not installed"; return 2; }
+
+  payload="$(python3 -c '
+import json, sys
+print(json.dumps({
+    "model": sys.argv[1],
+    "stream": False,
+    "format": "json",
+    "keep_alive": "30m",
+    "options": {"temperature": 0, "num_predict": 16},
+    "messages": [{"role": "user", "content": "Answer with a JSON object where ok is true."}],
+}))
+' "$model" 2>/dev/null)"
+  [[ -n "$payload" ]] || { OLLAMA_ERR="could not build the request body"; return 4; }
+
+  dim "asking $model - the first call loads the model into RAM, this can take a minute"
+  out="$(curl -s --max-time 300 -w $'\n%{http_code}' -H 'Content-Type: application/json' \
+         -d "$payload" "$OLLAMA_URL/api/chat" 2>/dev/null)"
+  code="${out##*$'\n'}"; body="${out%$'\n'*}"
+  if [[ "$code" != "200" ]]; then
+    OLLAMA_ERR="http ${code:-000}: $(printf '%s' "$body" | tr -d '\n' | cut -c1-200)"
+    return 3
+  fi
+  OLLAMA_ANS="$(printf '%s' "$body" | python3 -c '
+import json, sys
 try:
-    json.loads(c); print(c[:80])
+    d = json.load(sys.stdin)
+except Exception as e:
+    print("PARSE:" + str(e)[:120]); raise SystemExit(0)
+c = (d.get("message") or {}).get("content", "")
+try:
+    json.loads(c)
+    print(c[:80])
 except Exception:
-    print("")
+    print("NOTJSON:" + (c or "")[:120])
 ' 2>/dev/null)"
-  [[ -n "$ans" ]] || return 3
-  printf '%s' "$ans"
+  case "$OLLAMA_ANS" in
+    PARSE:*|NOTJSON:*) OLLAMA_ERR="${OLLAMA_ANS}"; OLLAMA_ANS=""; return 4 ;;
+    "") OLLAMA_ERR="empty answer"; return 4 ;;
+  esac
   return 0
 }
 
@@ -398,8 +438,9 @@ status() {
     ok "server: reachable at $OLLAMA_URL"
     echo "    installed: $(ollama_models | tr '\n' ' ')"
     local cur; cur="$(env_get TRADEAGENT_OLLAMA_MODEL)"; cur="${cur:-$DEFAULT_OLLAMA}"
-    if out="$(ollama_probe "$cur")"; then ok "model $cur answers: $out"
-    else warn "model $cur did not answer with JSON"; fi
+    ollama_probe "$cur"
+    if [[ $? -eq 0 ]]; then ok "model $cur answers: $OLLAMA_ANS"
+    else warn "model $cur did not answer: ${OLLAMA_ERR:-unknown}"; fi
   else warn "server: not reachable at $OLLAMA_URL"; fi
   echo
   echo "without either, cycles still run - decisions stay deterministic."
@@ -500,8 +541,9 @@ print("available   :", ", ".join(ms[:8]))
     set_env TRADEAGENT_LLM_PROVIDER ollama
     set_env TRADEAGENT_OLLAMA_MODEL "$DEFAULT_OLLAMA"
     set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
-    if out="$(ollama_probe "$DEFAULT_OLLAMA")"; then
-      ok "local model answered with JSON: $out"
+    ollama_probe "$DEFAULT_OLLAMA"
+    if [[ $? -eq 0 ]]; then
+      ok "local model answered with JSON: $OLLAMA_ANS"
     else
       warn "model is pulled but the test answer was unusable - the loop will fall back to deterministic"
     fi
@@ -513,15 +555,16 @@ print("available   :", ", ".join(ms[:8]))
     ollama_up || { (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
     ollama_up || { bad "cannot reach $OLLAMA_URL"; exit 1; }
     ollama_models | grep -qx "$model" || ollama pull "$model" || exit 1
-    if out="$(ollama_probe "$model")"; then
+    ollama_probe "$model"
+    if [[ $? -eq 0 ]]; then
       set_env TRADEAGENT_LLM_PROVIDER ollama
       set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
       set_env TRADEAGENT_OLLAMA_MODEL "$model"
       ok "provider=ollama model=$model"
-      ok "answered with JSON: $out"
+      ok "answered with JSON: $OLLAMA_ANS"
       ok "now: systemctl --user restart tradeagent-loop.service"
     else
-      bad "ollama has $model but it did not answer with JSON"
+      bad "ollama has $model but it did not answer: ${OLLAMA_ERR:-unknown}"
       exit 1
     fi ;;
 
