@@ -24,6 +24,22 @@ def test_config_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert cfg.get("publish.enabled") is False
 
 
+def test_dotenv_is_loaded_without_overriding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TRADEAGENT_SOURCE", raising=False)
+    monkeypatch.setenv("TRADEAGENT_RISK_PCT", "0.9")
+    (tmp_path / ".env").write_text(
+        "# comment\nexport TRADEAGENT_SOURCE=synthetic\nTRADEAGENT_RISK_PCT=0.1\nGEMINI_API_KEY=abc\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load(None, root=tmp_path)
+    assert cfg.get("data.source") == "synthetic"
+    # متغیر محیطی موجود بر .env مقدم است
+    assert cfg.get("paper.risk_per_trade_pct") == 0.9
+    import os
+
+    assert os.environ["GEMINI_API_KEY"] == "abc"
+
+
 def test_config_paths_expand(tmp_path: Path) -> None:
     cfg = Config({"data": {"state_dir": "var", "abs": "/tmp/x"},
                   "paper": {"sqlite": "var/paper.sqlite3"}}, root=tmp_path)

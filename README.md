@@ -59,7 +59,9 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 `demo` یک سیستم کامل را در `var/demo/...` می‌سازد: ژورنال SQLite، سیاست، و
 گزارشی که دقیقاً همان شکلی است که در گیت منتشر می‌شود.
 
-## شروع واقعی
+## شروع واقعی (اوبونتو، دستور به دستور)
+
+مسیر کامل و کامندبه‌کامند: [docs/UBUNTU-STEP-BY-STEP-FA.md](docs/UBUNTU-STEP-BY-STEP-FA.md)
 
 ```bash
 # ۱) MT5 روی Wine (اوبونتو/دبیان) — راهنما: docs/WINE-MT5-FA.md
@@ -157,6 +159,7 @@ docs/           راهنمای فارسی نصب، جریان داده، سیا�
 
 | فایل | محتوا |
 |---|---|
+| [docs/UBUNTU-STEP-BY-STEP-FA.md](docs/UBUNTU-STEP-BY-STEP-FA.md) | **دستور به دستور روی اوبونتو**: گیت → Wine → MT5 → اکسپرت → اجرا |
 | [docs/WINE-MT5-FA.md](docs/WINE-MT5-FA.md) | نصب MT5 روی Wine/ویندوز، اکسپرت، عیب‌یابی |
 | [docs/HARVESTER-FA.md](docs/HARVESTER-FA.md) | قرارداد فایل تیک، ورودی‌های اکسپرت، حجم دیسک |
 | [docs/AI-LOOP-FA.md](docs/AI-LOOP-FA.md) | چرخه‌ی ۵ دقیقه، استراتژی‌ها، نردبان، مدل، محدودیت‌ها |
