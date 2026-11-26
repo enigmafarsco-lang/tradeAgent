@@ -371,8 +371,9 @@ void WriteStatus()
    out += "]}";
    FileWriteString(h, out);
    FileClose(h);
+   // جابه‌جایی با ۴ آرگومان (سازگار با همه‌ی بیلدها)؛ پنجره‌ی نبودن فایل کوتاه است
    FileDelete(path);
-   FileMove(tmp, 0, path, 0, FILE_REWRITE);
+   FileMove(tmp, 0, path, 0);
 }
 
 void WriteSymbolsJson()
@@ -400,8 +401,9 @@ void WriteSymbolsJson()
    out += "]}";
    FileWriteString(h, out);
    FileClose(h);
+   // جابه‌جایی با ۴ آرگومان (سازگار با همه‌ی بیلدها)؛ پنجره‌ی نبودن فایل کوتاه است
    FileDelete(path);
-   FileMove(tmp, 0, path, 0, FILE_REWRITE);
+   FileMove(tmp, 0, path, 0);
 }
 
 //+------------------------------------------------------------------+

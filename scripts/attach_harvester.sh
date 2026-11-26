@@ -69,17 +69,25 @@ find_data_dirs() {
 }
 
 score_dir() {
-  local d="$1" score=0 btc
-  [[ -d "$d/bases" ]] && score=$((score + 3))
+  local d="$1" score=0 hit
+  # قوی‌ترین شاهد: خروجی تیک تازه (همان چیزی که connect هم می‌سنجد)
+  if [[ -f "$d/MQL5/Files/harvester/status.json" ]]; then
+    score=$((score + 4))
+    [[ -n "$(find "$d/MQL5/Files/harvester/status.json" -newermt '-10 minutes' 2>/dev/null)" ]] && score=$((score + 12))
+  fi
+  [[ -d "$d/MQL5/Files/harvester/ticks" ]] && score=$((score + 3))
+  if [[ -d "$d/bases" ]]; then
+    score=$((score + 3))
+    hit=$(find "$d/bases" -maxdepth 4 -type d -path '*/history/*' 2>/dev/null | head -n1)
+    [[ -n "$hit" ]] && score=$((score + 2))
+  fi
   [[ -d "$d/MQL5" ]] && score=$((score + 1))
-  [[ -d "$d/MQL5/Files/harvester" ]] && score=$((score + 4))
-  [[ -f "$d/MQL5/Files/harvester/status.json" ]] && score=$((score + 4))
-  [[ -d "$d/config" ]] && score=$((score + 2))
-  # portable.txt / origin.txt = نشانه‌ی پروفایل زنده‌ی ترمینال
-  [[ -f "$d/portable.txt" ]] && score=$((score + 4))
-  [[ -f "$d/origin.txt" ]] && score=$((score + 2))
-  btc=$(find "$d/bases" -maxdepth 3 -type d -iname '*XAU*' -o -maxdepth 3 -type d -iname '*BTC*' 2>/dev/null | head -n1)
-  [[ -n "$btc" ]] && score=$((score + 1))
+  [[ -d "$d/config" || -d "$d/Config" ]] && score=$((score + 1))
+  # نشانه‌های پروفایل (کم‌وزن، چون پوشه‌ی مرده هم آن‌ها را دارد)
+  [[ -f "$d/portable.txt" ]] && score=$((score + 1))
+  [[ -f "$d/origin.txt" ]] && score=$((score + 1))
+  # لاگ ترمینال تازه = ترمینال همین‌جاست
+  [[ -n "$(find "$d/logs" -maxdepth 1 -type f -newermt '-30 minutes' 2>/dev/null | head -n1)" ]] && score=$((score + 2))
   printf '%s' "$score"
 }
 

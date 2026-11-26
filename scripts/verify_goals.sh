@@ -36,6 +36,12 @@ PY
 )"
 
 say "=== 1) harvester heartbeat ==="
+# اکسپرت فایل را پشت‌سرهم بازنویسی می‌کند؛ یک لحظه ممکن است نباشد
+for _ in 1 2 3 4 5 6 7 8; do
+  [[ -n "$HARV" && -f "$HARV/status.json" ]] && break
+  sleep 0.25
+done
+
 if [[ -n "$HARV" && -f "$HARV/status.json" ]]; then
   RESULT="$(python3 - "$HARV/status.json" <<'PY'
 import json, os, sys, time
