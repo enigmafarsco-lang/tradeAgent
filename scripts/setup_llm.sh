@@ -117,16 +117,21 @@ import json,sys,re
 try: d=json.load(sys.stdin)
 except Exception: sys.exit()
 want=sys.argv[1]
-ms=[m["name"].split("/")[-1] for m in d.get("models",[])
-    if "generateContent" in m.get("supportedGenerationMethods",[])]
+BANNED=("tts","image","imagen","veo","embed","audio","live","native","vision","aqa","learnlm")
+def ok(n):
+    return not any(b in n.lower() for b in BANNED)
 def ver(n):
     m=re.search(r"gemini-(\d+(?:\.\d+)?)", n)
     return float(m.group(1)) if m else 0.0
+ms=[m["name"].split("/")[-1] for m in d.get("models",[])
+    if "generateContent" in m.get("supportedGenerationMethods",[])]
+ms=[n for n in ms if ok(n)]
+def rank(n):
+    return (-ver(n), 0 if "flash" in n else 1, n.count("-"), len(n))
+ms.sort(key=rank)
 out=[]
 if want in ms: out.append(want)
-flash=sorted([n for n in ms if "flash" in n], key=ver, reverse=True)
-rest=sorted([n for n in ms if n not in flash], key=ver, reverse=True)
-for n in flash+rest:
+for n in ms:
     if n not in out: out.append(n)
 print("\n".join(out))
 ' "$PREFERRED_GEMINI" 2>/dev/null
@@ -173,6 +178,19 @@ gemini_probe() {
     if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
     [[ "${CODE:-000}" == "000" ]] && return 2
     dim "model $model -> http ${CODE:-000}"
+    # 503 (شلوغی موقت) و 429 (سهمیه‌ی لحظه‌ای): همان مدل را یک‌بار دیگر امتحان کن
+    if [[ "${CODE:-}" == "503" || "${CODE:-}" == "429" ]]; then
+      dim "transient - retrying $model in 3s"
+      sleep 3
+      if [[ -n "${MOCK_RETRY_200:-}" ]]; then
+        CODE="200"; BODY='{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}'
+      else
+        http_post "$API_BASE/models/$model:generateContent?key=$key" \
+          '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
+      fi
+      if [[ "${CODE:-000}" == "200" ]]; then GEMINI_MODEL_OK="$model"; return 0; fi
+      dim "model $model -> http ${CODE:-000} again"
+    fi
     # اگر گوگل جانشین معرفی کرد، همان اول صف بیاید
     sug="$(python3 -c '
 import re,sys
@@ -181,6 +199,7 @@ if "no longer available" in t.lower() or "use models/" in t.lower():
     for n in re.findall(r"models/([A-Za-z0-9._-]{3,})", t):
         if not n.startswith("gemini-2.5"): print(n); break
 ' <<< "$BODY")"
+    case "$sug" in *tts*|*image*|*tts*|*audio*|*embed*|*vision*) sug="" ;; esac
     [[ -n "$sug" ]] && queue="$sug $queue"
     [[ "${CODE:-000}" == "400" || "${CODE:-000}" == "403" ]] && break
   done
@@ -204,7 +223,13 @@ interactive() {
     echo "stored key: $(mask "$(sanitize "$k")")"
     gemini_probe "$(sanitize "$k")"
     case $? in
-      0) ok "works with $GEMINI_MODEL_OK - nothing to do"
+      0) local stored; stored="$(env_get TRADEAGENT_LLM_MODEL)"
+         if [[ "$stored" != "$GEMINI_MODEL_OK" ]]; then
+           set_env TRADEAGENT_LLM_MODEL "$GEMINI_MODEL_OK"
+           ok "key is fine; model updated ${stored:-<none>} -> $GEMINI_MODEL_OK"
+         else
+           ok "works with $GEMINI_MODEL_OK - nothing to do"
+         fi
          echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
          return 0 ;;
       1) report_failure "the stored key was rejected"; dim "paste a fresh one below" ;;

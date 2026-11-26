@@ -27,6 +27,14 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 
 _SUGGEST_RE = re.compile(r"models/([A-Za-z0-9._-]{3,})")
 
+# مدل‌هایی که متنِ JSON برنمی‌گردانند (گفتار، تصویر، امبدینگ…) برای مشاور بی‌فایده‌اند
+NON_TEXT_TOKENS = ("tts", "image", "imagen", "veo", "embed", "audio", "live", "native", "aqa")
+
+
+def is_text_model(name: str) -> bool:
+    low = (name or "").lower()
+    return bool(low) and not any(tok in low for tok in NON_TEXT_TOKENS)
+
 
 def suggested_model(error_body: str) -> str | None:
     """مدلی که خودِ گوگل در پیام خطا پیشنهاد می‌کند (مثلاً وقتی مدلی بازنشسته شده)."""
@@ -34,8 +42,9 @@ def suggested_model(error_body: str) -> str | None:
     if "no longer available" not in text.lower() and "use models/" not in text.lower():
         return None
     for name in _SUGGEST_RE.findall(text):
-        if not name.startswith("gemini-2.5"):
-            return name
+        if name.startswith("gemini-2.5") or not is_text_model(name):
+            continue
+        return name
     return None
 
 SYSTEM_PROMPT = """تو یک مشاور ریسک برای یک سیستم معامله‌ی کاغذی (paper trading) هستی.
@@ -82,7 +91,12 @@ class LLMAdvisor:
         self.transport = transport
         self.enabled = bool(cfg.get("llm.enabled", True))
         self.provider = str(cfg.get("llm.provider", "none") or "none").lower()
-        self.model = str(cfg.get("llm.model", "gemini-2.5-flash"))
+        self.model = str(cfg.get("llm.model", "gemini-3.8-flash"))
+        if not is_text_model(self.model):
+            LOG.warning(
+                "مدل %s متنی نیست (گفتار/تصویر)؛ ./scripts/setup_llm.sh مدل متنی انتخاب می‌کند",
+                self.model,
+            )
         self.ollama_model = str(cfg.get("llm.ollama_model", "qwen2.5:7b-instruct"))
         self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
         self.timeout = float(cfg.get("llm.timeout_s", 45))
@@ -135,9 +149,40 @@ class LLMAdvisor:
             + "\n\nفقط JSON بده."
         )
 
+    def _gemini_post(self, key: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """POST با دو سیاست: ۵۰۳/۴۲۹ را دوباره، ۴۰۴ را با مدلِ پیشنهادی گوگل."""
+        meta: dict[str, Any] = {}
+        url = GEMINI_URL.format(model=self.model, key=key)
+        for attempt in range(3):
+            try:
+                return self.transport(url, payload, {}, self.timeout), meta
+            except urllib.error.HTTPError as exc:
+                raw = ""
+                try:
+                    raw = exc.read().decode("utf-8", errors="replace")
+                except Exception:  # noqa: BLE001 - متن خطا اختیاری است
+                    raw = ""
+                if exc.code in (503, 429) and attempt == 0:
+                    LOG.warning("مدل %s موقتاً شلوغ است (HTTP %s) - ۳ ثانیه بعد دوباره", self.model, exc.code)
+                    time.sleep(3)
+                    continue
+                new_model = suggested_model(raw) if exc.code == 404 else None
+                if new_model and new_model != self.model:
+                    LOG.warning(
+                        "مدل %s در دسترس نیست؛ گوگل %s را پیشنهاد داد - همان را امتحان می‌کنم",
+                        self.model, new_model,
+                    )
+                    self.model = new_model
+                    meta["model_switched_to"] = new_model
+                    url = GEMINI_URL.format(model=self.model, key=key)
+                    continue
+                if raw:
+                    exc.args = (*exc.args, raw[:400])
+                raise
+        raise RuntimeError("gemini: نتوانستم مدل مناسبی پیدا کنم")
+
     def _call_gemini(self, prompt: str) -> tuple[str, dict[str, Any]]:
         key = self.api_key()
-        url = GEMINI_URL.format(model=self.model, key=key)
         payload = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -147,30 +192,8 @@ class LLMAdvisor:
                 "responseMimeType": "application/json",
             },
         }
-        try:
-            data = self.transport(url, payload, {}, self.timeout)
-        except urllib.error.HTTPError as exc:
-            body = ""
-            try:
-                body = exc.read().decode("utf-8", errors="replace")
-            except Exception:  # noqa: BLE001 - خواندن پیام خطا اختیاری است
-                body = ""
-            new_model = suggested_model(body)
-            if exc.code == 404 and new_model and new_model != self.model:
-                LOG.warning(
-                    "مدل %s در دسترس نیست؛ گوگل %s را پیشنهاد داد - همان را امتحان می‌کنم",
-                    self.model, new_model,
-                )
-                self.model = new_model
-                url = GEMINI_URL.format(model=self.model, key=key)
-                data = self.transport(url, payload, {}, self.timeout)
-                extra_model = self.model
-            else:
-                if body:
-                    exc.args = (*exc.args, body[:400])
-                raise
-        else:
-            extra_model = None
+        data, extra = self._gemini_post(key, payload)
+        extra_model = extra.get("model_switched_to")
         text = ""
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]

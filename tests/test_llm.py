@@ -144,3 +144,35 @@ def test_suggested_model_ignores_unrelated_errors() -> None:
         "This model models/gemini-2.5-flash is no longer available to new users. "
         "Please update your code to use models/gemini-3.8-flash"
     ) == "gemini-3.8-flash"
+
+
+def test_transient_503_is_retried_on_the_same_model(gemini_cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import urllib.error
+
+    from tradeagent import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod.time, "sleep", lambda s: None)
+    seen: list[str] = []
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        seen.append(url)
+        if len(seen) == 1:
+            raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":{"code":503}}'))
+        return {"candidates": [{"content": {"parts": [{"text": '{"variant":"scalp","params":{},"reason":"ok","confidence":0.5}'}]}}]}
+
+    advisor = LLMAdvisor(gemini_cfg, tmp_path / "calls.json", transport=transport)
+    result = advisor.consult({"cycle": 2})
+    assert result.proposal is not None, result.meta
+    assert "gemini-2.5-flash" in seen[0] and "gemini-2.5-flash" in seen[1]
+    assert result.meta.get("model_switched_to") is None
+
+
+def test_speech_models_are_not_used() -> None:
+    from tradeagent.llm import is_text_model, suggested_model
+
+    assert is_text_model("gemini-3.8-flash")
+    assert not is_text_model("gemini-3.8-flash-tts")
+    assert not is_text_model("gemini-3.8-flash-image")
+    # پیشنهاد گوگل اگر مدل گفتاری باشد نادیده گرفته می‌شود
+    assert suggested_model("use models/gemini-3.8-flash-tts") is None
