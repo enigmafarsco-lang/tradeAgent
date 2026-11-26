@@ -14,7 +14,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
-CONFIG="$ROOT/configs/local.toml"
+CONFIG="${VERIFY_CONFIG:-$ROOT/configs/local.toml}"
 [[ -f "$CONFIG" ]] || CONFIG="$ROOT/configs/default.toml"
 MAX_REPORT_AGE=900
 [[ "${1:-}" == "--max-report-age" && -n "${2:-}" ]] && MAX_REPORT_AGE="$2"
@@ -37,29 +37,42 @@ PY
 
 say "=== 1) harvester heartbeat ==="
 if [[ -n "$HARV" && -f "$HARV/status.json" ]]; then
-  python3 - "$HARV/status.json" <<'PY'
-import json, sys, time
-p = sys.argv[1]
-d = json.load(open(p, encoding="utf-8"))
-ages = [s.get("age_s", -1) for s in d.get("symbols", []) if isinstance(s, dict)]
+  RESULT="$(python3 - "$HARV/status.json" <<'PY'
+import json, os, sys, time
+
+path = sys.argv[1]
+data = None
+for _ in range(6):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        break
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        time.sleep(0.25)          # the EA may be rewriting the file right now
+if data is None:
+    mtime_age = max(0.0, time.time() - os.stat(path).st_mtime)
+    print(f"  path      : {path}")
+    print("  note      : status.json unreadable (rewritten while reading) - using mtime")
+    print(f"  heartbeat : {mtime_age:.0f}s ago")
+    print("OK" if mtime_age < 180 else "STALE")
+    raise SystemExit
+
+ages = [s.get("age_s", -1) for s in data.get("symbols", []) if isinstance(s, dict)]
 fresh = [a for a in ages if isinstance(a, (int, float)) and a >= 0]
-age = min(fresh) if fresh else max(0.0, time.time() - __import__("os").stat(p).st_mtime)
-ticks = d.get("total_ticks", 0)
-sym = len(d.get("symbols", []))
-print(f"  path      : {p}")
-print(f"  symbols   : {sym} | total_ticks: {ticks}")
+mtime_age = max(0.0, time.time() - os.stat(path).st_mtime)
+age = min(fresh) if fresh else mtime_age
+print(f"  path      : {path}")
+print(f"  symbols   : {len(data.get('symbols', []))} | total_ticks: {data.get('total_ticks', 0)} | version: {data.get('version', '?')}")
 print(f"  heartbeat : {age:.0f}s ago")
-print("RESULT", "OK" if age < 180 else "STALE")
-PY
-  [[ "$(python3 - "$HARV/status.json" <<'PY'
-import json, sys, time, os
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-ages = [s.get("age_s", -1) for s in d.get("symbols", []) if isinstance(s, dict)]
-fresh = [a for a in ages if isinstance(a, (int, float)) and a >= 0]
-age = min(fresh) if fresh else max(0.0, time.time() - os.stat(sys.argv[1]).st_mtime)
 print("OK" if age < 180 else "STALE")
 PY
-)" == "OK" ]] && pass "harvester is alive" || fail "harvester heartbeat is stale (>180s) - EA/AutoTrading?"
+)"
+  printf '%s\n' "$RESULT" | sed 's/^/  /'
+  if printf '%s\n' "$RESULT" | grep -qx 'OK'; then
+    pass "harvester is alive"
+  else
+    fail "harvester heartbeat is stale (>180s) - EA/AutoTrading?"
+  fi
 else
   fail "no status.json at ${HARV:-<harvester_dir not set>} - the EA never ran"
 fi

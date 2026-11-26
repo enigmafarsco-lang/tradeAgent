@@ -32,7 +32,7 @@ input group             "3) Safety"
 input int    InpMaxTicksPerPoll   = 20000;         // سقف تیک هر نظرسنجی هر نماد
 input bool   InpStopOnFileLimit   = true;          // توقف ضبط نماد در صورت پر شدن فایل
 
-#define HARVESTER_VERSION "1.00"
+#define HARVESTER_VERSION "1.01"
 #define MAX_SYMBOLS_HARD  120
 
 //+------------------------------------------------------------------+
@@ -329,8 +329,10 @@ void HarvestSymbol(const int idx)
 //+------------------------------------------------------------------+
 void WriteStatus()
 {
+   // نوشتن اتمیک: اول فایل موقت، بعد جایگزینی — تا خواننده فایل نیمه‌کاره نبیند
    string path = InpOutDir + "/status.json";
-   int h = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   string tmp  = InpOutDir + "/status.tmp";
+   int h = FileOpen(tmp, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;
 
@@ -369,12 +371,15 @@ void WriteStatus()
    out += "]}";
    FileWriteString(h, out);
    FileClose(h);
+   FileDelete(path);
+   FileMove(tmp, 0, path, 0, FILE_REWRITE);
 }
 
 void WriteSymbolsJson()
 {
    string path = InpOutDir + "/symbols.json";
-   int h = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   string tmp  = InpOutDir + "/symbols.tmp";
+   int h = FileOpen(tmp, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
       return;
    string out = "{";
@@ -395,6 +400,8 @@ void WriteSymbolsJson()
    out += "]}";
    FileWriteString(h, out);
    FileClose(h);
+   FileDelete(path);
+   FileMove(tmp, 0, path, 0, FILE_REWRITE);
 }
 
 //+------------------------------------------------------------------+

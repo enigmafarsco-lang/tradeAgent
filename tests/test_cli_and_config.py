@@ -165,3 +165,22 @@ def test_doctor_flags_stale_heartbeat(tmp_path):
     checks = run_doctor(cfg, network=False)
     data_check = next(c for c in checks if "harvester" in c.name)
     assert data_check.status == "warn"
+
+
+def test_doctor_falls_back_to_mtime_when_status_is_half_written(tmp_path):
+    """status.json ممکن است وسط بازنویسی خوانده شود؛ doctor نباید FAIL بدهد."""
+    from tradeagent.doctor import run_doctor
+
+    harv = tmp_path / "harvester"
+    (harv / "ticks").mkdir(parents=True)
+    (harv / "status.json").write_text('{"symbols":[{"symbol":"XAUUSD_i","age_s":', encoding="utf-8")
+    cfg = Config.load(REPO_ROOT / "configs" / "default.toml", root=tmp_path)
+    cfg.set("data.source", "harvester")
+    cfg.set("data.harvester_dir", str(harv))
+    cfg.set("publish.enabled", False)
+    cfg.set("llm.enabled", False)
+    checks = run_doctor(cfg, network=False)
+    data_check = next(c for c in checks if "harvester" in c.name)
+    # فایل تازه است → mtime می‌گوید سالم، نه هشدار «اکسپرت اجرا نشده»
+    assert data_check.status == "ok", data_check.detail
+    assert "s پیش" in data_check.detail
