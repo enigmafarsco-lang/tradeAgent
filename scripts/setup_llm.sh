@@ -1,199 +1,304 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Language model: free Gemini API or local Ollama. One command, key never in git.
+# Language model for the trading loop: free Gemini API key, or local Ollama.
+# Nothing is ever written to .env unless a real request to the provider succeeds.
 #
-#   ./scripts/setup_llm.sh --status                  what is active right now?
-#   ./scripts/setup_llm.sh --gemini <REAL_KEY>       test the key, then store it
-#   ./scripts/setup_llm.sh --install-ollama          install ollama (needs sudo) + pull model
-#   ./scripts/setup_llm.sh --ollama [model]          use an already installed ollama
-#   ./scripts/setup_llm.sh --off                     deterministic only
+#   ./scripts/setup_llm.sh --status              what is active right now?
+#   ./scripts/setup_llm.sh --gemini              ask for the key (hidden), verify, store
+#   ./scripts/setup_llm.sh --diagnose            show the provider's own answer, key masked
+#   ./scripts/setup_llm.sh --install-ollama      install ollama (sudo) + pull the model
+#   ./scripts/setup_llm.sh --ollama [model]      use an ollama that is already installed
+#   ./scripts/setup_llm.sh --off                 deterministic decisions only
 #
-# Free Gemini key: https://aistudio.google.com/apikey  (no card, free tier)
+# Free Gemini key: https://aistudio.google.com/apikey   (no card, free tier)
+# Real key shape: starts with AIza, ~39 chars, letters/digits/-/_ only.
 # ---------------------------------------------------------------------------
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
 OLLAMA_URL="${TRADEAGENT_OLLAMA_URL:-http://127.0.0.1:11434}"
-DEFAULT_MODEL="${TRADEAGENT_OLLAMA_MODEL:-qwen2.5:7b-instruct}"
-GEMINI_MODEL="${TRADEAGENT_LLM_MODEL:-gemini-2.5-flash}"
+DEFAULT_OLLAMA="${TRADEAGENT_OLLAMA_MODEL:-qwen2.5:7b-instruct}"
+PREFERRED_GEMINI="${TRADEAGENT_LLM_MODEL:-gemini-2.5-flash}"
+API_BASE="https://generativelanguage.googleapis.com/v1beta"
 
 ok()   { printf '\033[1;32m[llm]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[llm]\033[0m %s\n' "$*"; }
 bad()  { printf '\033[1;31m[llm]\033[0m %s\n' "$*"; }
+dim()  { printf '\033[2m[llm]   %s\033[0m\n' "$*"; }
+
+mask() {
+  local k="$1"
+  [[ ${#k} -le 12 ]] && { printf '<too short>'; return; }
+  printf '%s…%s (%d chars)' "${k:0:6}" "${k: -4}" "${#k}"
+}
 
 set_env() {
   local key="$1" value="$2" tmp
-  touch "$ENV_FILE"
-  tmp="$(mktemp)"
+  touch "$ENV_FILE"; tmp="$(mktemp)"
   grep -v "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
   printf '%s=%s\n' "$key" "$value" >> "$tmp"
-  mv "$tmp" "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
+  mv "$tmp" "$ENV_FILE"; chmod 600 "$ENV_FILE"
 }
-
 env_get() { grep -s "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | head -n1; }
 
-looks_like_placeholder() {
+# پاک‌سازی: CR، فاصله، کوتیشن و بک‌اسلشِ پایانی که از چسباندن می‌آید
+sanitize() {
   local k="$1"
-  [[ -z "$k" ]] && return 0
-  # هر کاراکتر غیر ASCII (حروف فارسی، «…»، فاصله‌ی نامرئی) یعنی متن کپی‌شده از چت
-  if printf '%s' "$k" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then return 0; fi
+  k="${k//$'\r'/}"; k="${k//$'\n'/}"; k="${k// /}"; k="${k//$'\t'/}"
+  k="${k%\\}"; k="${k%\"}"; k="${k#\"}"; k="${k%\'}"; k="${k#\'}"
+  printf '%s' "$k"
+}
+
+not_a_key_reason() {   # چاپ دلیل یا رشته‌ی خالی اگر معتبر به نظر می‌رسد
+  local k="$1"
+  [[ -z "$k" ]] && { echo "empty"; return; }
+  if printf '%s' "$k" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then
+    echo "non-ascii"; return; fi
   case "$k" in
-    *"..."*|*"…"*|*YOUR*|*your*|*xxx*|*XXX*|*EXAMPLE*|*placeholder*|*KEY*|*PASTE*) return 0 ;;
+    *"..."*|*"…"*|*YOUR*|*your*|*PASTE*|*KEY*|*xxx*|*XXX*|*EXAMPLE*|*placeholder*)
+      echo "placeholder"; return ;;
   esac
-  [[ ${#k} -lt 25 ]] && return 0
-  return 1
+  if [[ ! "$k" =~ ^AIza[0-9A-Za-z_-]{30,}$ ]]; then echo "shape"; return; fi
+  echo ""
+}
+
+http_get() {   # http_get <url> ; sets CODE / BODY
+  local url="$1" out
+  out="$(curl -s --max-time 30 -w $'\n%{http_code}' "$url" 2>/dev/null)"
+  CODE="${out##*$'\n'}"; BODY="${out%$'\n'*}"
+}
+
+http_post() {  # http_post <url> <json>
+  local url="$1" data="$2" out
+  out="$(curl -s --max-time 30 -w $'\n%{http_code}' -H 'Content-Type: application/json' -d "$data" "$url" 2>/dev/null)"
+  CODE="${out##*$'\n'}"; BODY="${out%$'\n'*}"
+}
+
+json_field() {  # json_field <key>  → نخستین مقدار رشته‌ای با این نام (stdin = JSON)
+  python3 -c '
+import json,sys
+try: d=json.loads(sys.stdin.read() or "{}")
+except Exception: sys.exit()
+key=sys.argv[1]
+def walk(o):
+    if isinstance(o,dict):
+        for k,v in o.items():
+            if k==key and isinstance(v,(str,int)): yield str(v)
+            yield from walk(v)
+    elif isinstance(o,list):
+        for v in o: yield from walk(v)
+for v in walk(d): print(v)
+' "$1" 2>/dev/null
+}
+
+explain() {   # پیام انسانی از پاسخ گوگل
+  local reason msg
+  reason="$(printf '%s' "$BODY" | json_field reason | head -n1)"
+  msg="$(printf '%s' "$BODY" | json_field message | head -n1)"
+  case "$reason" in
+    API_KEY_INVALID)      echo "the key is not valid (Google: API_KEY_INVALID) - generate a new one";;
+    API_KEY_EXPIRED)      echo "the key has expired - generate a new one";;
+    API_KEY_SERVICE_BLOCKED) echo "this key is restricted and does not allow the Generative Language API - edit the key in AI Studio and clear the API restrictions";;
+    SERVICE_DISABLED)     echo "the Generative Language API is not enabled for that project - enable it, or create the key in AI Studio (not in Cloud Console)";;
+    PERMISSION_DENIED)    echo "permission denied - the key belongs to a project without access";;
+    "")                   ;;
+    *)                    echo "Google reason: $reason";;
+  esac
+  [[ -n "$msg" ]] && dim "google said: $msg"
+  return 0
+}
+
+# 0 = works (sets GEMINI_MODEL_OK), 1 = key rejected, 2 = network, 3 = other
+gemini_probe() {
+  local key="$1"
+  GEMINI_MODEL_OK=""
+  if [[ -n "${GEMINI_PROBE_MOCK:-}" ]]; then      # تست آفلاین
+    CODE="${GEMINI_PROBE_MOCK%%|*}"; BODY="${GEMINI_PROBE_MOCK#*|}"
+  else
+    http_get "$API_BASE/models?key=$key"
+  fi
+  if [[ "${CODE:-000}" != "200" ]]; then
+    [[ "$CODE" == "000" ]] && return 2
+    [[ "$CODE" =~ ^4 ]] && return 1
+    return 3
+  fi
+  local model
+  model="$(printf '%s' "$BODY" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+want=sys.argv[1]
+names=[m["name"].split("/")[-1] for m in d.get("models",[])
+       if "generateContent" in m.get("supportedGenerationMethods",[])]
+best=[n for n in names if n==want] or [n for n in names if n.startswith(want.split("-")[0])] or names
+print(best[0] if best else "")
+' "$PREFERRED_GEMINI" 2>/dev/null)"
+  [[ -z "$model" ]] && { BODY='{"error":{"message":"models list had no generateContent model"}}'; return 3; }
+  if [[ -n "${GEMINI_GEN_MOCK:-}" ]]; then
+    CODE="${GEMINI_GEN_MOCK%%|*}"; BODY="${GEMINI_GEN_MOCK#*|}"
+  else
+    http_post "$API_BASE/models/$model:generateContent?key=$key" \
+      '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}'
+  fi
+  [[ "${CODE:-000}" == "200" ]] || { [[ "${CODE:-000}" == "000" ]] && return 2; return 1; }
+  GEMINI_MODEL_OK="$model"
+  return 0
+}
+
+report_failure() {
+  bad "$1"
+  explain
+  dim "http ${CODE:-000}"
+  [[ -n "${BODY:-}" ]] && dim "raw: $(printf '%s' "$BODY" | tr -d '\n' | cut -c1-300)"
+  return 0
 }
 
 script_version() {
-  local rev
-  rev="$(git -C "$ROOT" log -1 --format=%h -- scripts/setup_llm.sh 2>/dev/null || echo unknown)"
-  echo "$rev"
-}
-
-# 0=ok 1=bad key 2=network 3=unknown
-gemini_probe() {
-  local key="$1" body code
-  body="$(curl -s --max-time 25 -w '\n%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -d '{"contents":[{"parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":8}}' \
-    "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}" 2>/dev/null)"
-  code="$(printf '%s' "$body" | tail -n1)"
-  case "$code" in
-    200) return 0 ;;
-    400|403) return 1 ;;
-    000|"") return 2 ;;
-    *) return 3 ;;
-  esac
+  git -C "$ROOT" log -1 --format=%h -- scripts/setup_llm.sh 2>/dev/null || echo unknown
 }
 
 ollama_up() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" | grep -q '"models"'; }
 
 status() {
   echo "--- script ---"
-  echo "  version               : $(script_version)  (newest on origin: $(git -C "$ROOT" log -1 --format=%h origin/arena/e32ad3ff-tradeagent -- scripts/setup_llm.sh 2>/dev/null || echo '?'))"
+  echo "  version               : $(script_version)"
   echo "--- .env ---"
   local k p
-  k="$(env_get GEMINI_API_KEY)"
-  p="$(env_get TRADEAGENT_LLM_PROVIDER)"
-  if [[ -z "$k" ]]; then
-    echo "  GEMINI_API_KEY        : (empty)"
-  elif looks_like_placeholder "$k"; then
-    echo "  GEMINI_API_KEY        : looks like a placeholder (${#k} chars) - ignored"
-  else
-    echo "  GEMINI_API_KEY        : set (${#k} chars)"
-  fi
+  k="$(env_get GEMINI_API_KEY)"; p="$(env_get TRADEAGENT_LLM_PROVIDER)"
+  if [[ -z "$k" ]]; then echo "  GEMINI_API_KEY        : (empty)"
+  elif [[ -n "$(not_a_key_reason "$k")" ]]; then echo "  GEMINI_API_KEY        : not usable ($(not_a_key_reason "$k"), ${#k} chars)"
+  else echo "  GEMINI_API_KEY        : $(mask "$k")"; fi
   echo "  provider              : ${p:-gemini (default)}"
   echo "  ollama url            : $OLLAMA_URL"
 
   echo "--- gemini ---"
-  if [[ -z "$k" ]] || looks_like_placeholder "$k"; then
-    warn "no usable key. Free key: https://aistudio.google.com/apikey"
+  if [[ -z "$k" ]]; then
+    warn "no key stored"
+  elif [[ -n "$(not_a_key_reason "$k")" ]]; then
+    warn "stored value is not a key ($(not_a_key_reason "$k"))"
   else
     gemini_probe "$k"
     case $? in
-      0) ok "key works against $GEMINI_MODEL" ;;
-      1) bad "key rejected (400/403) - create a new one at aistudio.google.com/apikey" ;;
-      2) warn "cannot reach generativelanguage.googleapis.com (network/proxy?)" ;;
-      *) warn "unexpected answer from the Gemini API" ;;
+      0) ok "works: model $GEMINI_MODEL_OK";;
+      1) report_failure "the API rejected this key";;
+      2) warn "cannot reach generativelanguage.googleapis.com (network/proxy)";;
+      *) report_failure "unexpected answer from the API";;
     esac
   fi
 
   echo "--- ollama ---"
-  if command -v ollama >/dev/null; then ok "binary: $(command -v ollama)"; else warn "binary: not installed"; fi
+  command -v ollama >/dev/null && ok "binary: $(command -v ollama)" || warn "binary: not installed"
   if ollama_up; then
     ok "server: reachable at $OLLAMA_URL"
     curl -s "$OLLAMA_URL/api/tags" | tr ',' '\n' | grep -o '"name":"[^"]*"' | head -5 | sed 's/^/    /'
-  else
-    warn "server: not reachable at $OLLAMA_URL"
-  fi
+  else warn "server: not reachable at $OLLAMA_URL"; fi
   echo
   echo "without either, cycles still run - decisions stay deterministic."
 }
 
-case "${1:-}" in
-  --status|"")
-    status ;;
+do_gemini() {
+  local key
+  key="$(env_get GEMINI_API_KEY)"
+  if [[ $# -gt 0 && -n "${1:-}" ]]; then key="$1"
+  else
+    printf '[llm] paste the key (hidden; not in shell history): '
+    read -rs key; echo
+  fi
+  local clean; clean="$(sanitize "$key")"
+  [[ "$clean" != "$key" ]] && warn "removed spaces/quotes/CR from what was pasted"
 
-  --gemini)
-    rc=0
-    key="${2:-}"
-    if [[ -z "$key" ]]; then
-      printf '[llm] paste the key (it stays hidden, not in shell history): '
-      read -rs key
-      echo
+  local why; why="$(not_a_key_reason "$clean")"
+  case "$why" in
+    empty) bad "nothing was pasted"; return 2;;
+    non-ascii) bad "that text contains non-ASCII characters - it is a placeholder from the chat, not a key"
+               dim "a real key is A-Z a-z 0-9 - _ and starts with AIza"; return 2;;
+    placeholder) bad "that is a placeholder, not a key: '$clean'"
+               dim "free key: https://aistudio.google.com/apikey"; return 2;;
+    shape) bad "this is not the shape of a Gemini key: $(mask "$clean")"
+           dim "expected AIza + ~35 more chars (letters, digits, - or _), total ~39"
+           dim "in AI Studio the key is shown once - press the copy icon, not a screenshot"
+           return 2;;
+  esac
+
+  gemini_probe "$clean"
+  case $? in
+    0) set_env GEMINI_API_KEY "$clean"
+       set_env TRADEAGENT_LLM_PROVIDER gemini
+       set_env TRADEAGENT_LLM_MODEL "$GEMINI_MODEL_OK"
+       ok "verified with model $GEMINI_MODEL_OK; stored in .env (600)"
+       ok "now: systemctl --user restart tradeagent-loop.service" ;;
+    1) report_failure "the API rejected this key"
+       dim "nothing written to .env"; return 1;;
+    2) bad "cannot reach generativelanguage.googleapis.com from this machine"
+       dim "test: curl -sS -o /dev/null -w '%{http_code}\\n' https://generativelanguage.googleapis.com"
+       dim "behind a proxy? export https_proxy=http://127.0.0.1:PORT then retry"
+       return 1;;
+    *) report_failure "unexpected answer from the API"; return 1;;
+  esac
+}
+
+case "${1:-}" in
+  --status|"") status ;;
+
+  --gemini) shift; do_gemini "$@" ;;
+
+  --diagnose)
+    k="$(env_get GEMINI_API_KEY)"
+    [[ -n "$k" ]] || { bad "no key stored in .env"; exit 1; }
+    clean="$(sanitize "$k")"
+    echo "key         : $(mask "$clean")"
+    echo "shape ok?   : $([[ -z "$(not_a_key_reason "$clean")" ]] && echo yes || echo "no ($(not_a_key_reason "$clean"))")"
+    echo "model asked : $PREFERRED_GEMINI"
+    if [[ -n "${GEMINI_PROBE_MOCK:-}" ]]; then
+      CODE="${GEMINI_PROBE_MOCK%%|*}"; BODY="${GEMINI_PROBE_MOCK#*|}"
+    else
+      http_get "$API_BASE/models?key=$clean"
     fi
-    if looks_like_placeholder "$key"; then
-      bad "that is not a usable key: '$key'"
-      if printf '%s' "$key" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then
-        echo "    it contains non-ASCII characters - this is text copied from the chat,"
-        echo "    not a real key. A real Gemini key is only A-Z a-z 0-9 _ - and starts with AIza."
-      else
-        echo "    a real Gemini key starts with AIza and is about 39 characters."
-        echo "    free key: https://aistudio.google.com/apikey"
-      fi
-      echo "    nothing written to .env"
-      exit 2
+    echo "models GET  : http ${CODE:-000}"
+    [[ "${CODE:-}" == "200" ]] && printf '%s' "$BODY" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+ms=[m["name"].split("/")[-1] for m in d.get("models",[]) if "generateContent" in m.get("supportedGenerationMethods",[])]
+print("available   :", ", ".join(ms[:8]))
+' || dim "raw: $(printf '%s' "$BODY" | tr -d '\n' | cut -c1-400)"
+    if [[ "${CODE:-}" == "200" ]]; then
+      ok "the key is accepted by Google"
+    else
+      explain
     fi
-    gemini_probe "$key"
-    case $? in
-      0) set_env GEMINI_API_KEY "$key"
-         set_env TRADEAGENT_LLM_PROVIDER gemini
-         ok "key verified against $GEMINI_MODEL and stored in .env (600)"
-         ok "restart: systemctl --user restart tradeagent-loop.service" ;;
-      1) bad "the API rejected this key (400/403). Nothing written."; rc=1
-         echo "    - copy the key again, no spaces; keys start with 'AIza' and are ~39 chars"
-         echo "    - the Generative Language API must be enabled for that project" ;;
-      2) bad "cannot reach generativelanguage.googleapis.com from this machine."; rc=1
-         echo "    - test it: curl -sS -o /dev/null -w '%{http_code}\\n' https://generativelanguage.googleapis.com"
-         echo "    - behind a proxy? export https_proxy=http://127.0.0.1:PORT and retry"
-         echo "    - or use the local model: ./scripts/setup_llm.sh --install-ollama" ;;
-      *) bad "unexpected answer from the API. Nothing written."; rc=1 ;;
-    esac
-    exit "$rc" ;;
+    ;;
 
   --install-ollama)
-    if command -v ollama >/dev/null; then
-      ok "ollama already installed: $(command -v ollama)"
-    else
-      warn "this downloads ~1.6 GB and installs a system service (sudo password will be asked)"
+    if ! command -v ollama >/dev/null; then
+      warn "downloads ~1.6 GB and installs a system service (sudo password will be asked)"
       read -r -p "continue? [y/N] " ans
       [[ "${ans:-n}" =~ ^[Yy]$ ]] || { warn "aborted"; exit 1; }
       curl -fsSL https://ollama.com/install.sh | sh || { bad "install failed (network?)"; exit 1; }
-      command -v ollama >/dev/null || { bad "installed but 'ollama' is not on PATH"; exit 1; }
+      command -v ollama >/dev/null || { bad "installed but not on PATH"; exit 1; }
       ok "ollama installed"
-    fi
-    if ! ollama_up; then
-      warn "server not up; starting it in the background"
-      (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; sleep 3
-    fi
+    else ok "ollama already installed: $(command -v ollama)"; fi
+    ollama_up || { warn "starting server"; (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
     ollama_up || { bad "server still down; see /tmp/ollama.log"; exit 1; }
-    if ! curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$DEFAULT_MODEL\""; then
-      warn "pulling $DEFAULT_MODEL (~4.7 GB, once)"
-      ollama pull "$DEFAULT_MODEL" || { bad "pull failed"; exit 1; }
-    fi
+    curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$DEFAULT_OLLAMA\"" || ollama pull "$DEFAULT_OLLAMA" || exit 1
     set_env TRADEAGENT_LLM_PROVIDER ollama
-    set_env TRADEAGENT_OLLAMA_MODEL "$DEFAULT_MODEL"
+    set_env TRADEAGENT_OLLAMA_MODEL "$DEFAULT_OLLAMA"
     set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
-    ok "provider=ollama model=$DEFAULT_MODEL"
-    ok "restart: systemctl --user restart tradeagent-loop.service" ;;
+    ok "provider=ollama model=$DEFAULT_OLLAMA"
+    ok "now: systemctl --user restart tradeagent-loop.service" ;;
 
   --ollama)
-    model="${2:-$DEFAULT_MODEL}"
-    command -v ollama >/dev/null || { bad "ollama is not installed; run: ./scripts/setup_llm.sh --install-ollama"; exit 1; }
-    ollama_up || { warn "starting ollama"; (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; sleep 3; }
-    ollama_up || { bad "server not reachable at $OLLAMA_URL"; exit 1; }
+    model="${2:-$DEFAULT_OLLAMA}"
+    command -v ollama >/dev/null || { bad "not installed; run: ./scripts/setup_llm.sh --install-ollama"; exit 1; }
+    ollama_up || { (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
+    ollama_up || { bad "cannot reach $OLLAMA_URL"; exit 1; }
     curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$model\"" || ollama pull "$model" || exit 1
     set_env TRADEAGENT_LLM_PROVIDER ollama
     set_env TRADEAGENT_OLLAMA_MODEL "$model"
     ok "provider=ollama model=$model" ;;
 
-  --off)
-    set_env TRADEAGENT_LLM_PROVIDER none
-    ok "provider=none (deterministic decisions only)" ;;
+  --off) set_env TRADEAGENT_LLM_PROVIDER none; ok "provider=none (deterministic only)" ;;
 
-  -h|--help)
-    sed -n '2,/^set -uo/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//' ;;
+  -h|--help) sed -n '2,/^set -uo/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//' ;;
 
   *) bad "unknown option: $1"; exit 2 ;;
 esac

@@ -152,6 +152,21 @@ systemctl --user start tradeagent-loop
 
 هر سه حالت فقط روی `.env` (که در گیت نیست) می‌نویسند؛ هیچ کلیدی در ریپو نمی‌رود.
 
+### اگر کلید رد شد: اول تشخیص، بعد حدس
+
+```bash
+./scripts/setup_llm.sh --diagnose
+```
+
+این دستور پاسخ خام خود گوگل را (با کلید پوشیده) چاپ می‌کند. سه حالت رایج:
+
+| پاسخ گوگل | معنی | کار |
+|---|---|---|
+| `API_KEY_INVALID` (400) | کلید غلط/ناقص | کلید را دوباره از AI Studio با آیکن کپی بردار (نه اسکرین‌شات) |
+| `API_KEY_SERVICE_BLOCKED` (403) | کلید محدود شده | در AI Studio → کلید → API restrictions را بردار |
+| `SERVICE_DISABLED` (403) | API روی آن پروژه روشن نیست | کلید را در AI Studio بساز (نه Cloud Console)؛ یا همان پروژه را فعال کن |
+| `http 000` | شبکه بسته است | پروکسی/فیلتر؛ `export https_proxy=...` یا مسیر Ollama |
+
 ### گرفتن کلید Gemini رایگان (بدون کارت)
 
 1. برو به <https://aistudio.google.com/apikey> با همان حساب گوگل.
