@@ -23,6 +23,7 @@ DATA_ARG=""
 DRY=0
 QUIET=0
 LIST_SYMBOLS=0
+ALL_TERMINALS=0
 OUT_DIR="$ROOT/var/mt5"
 
 log()  { printf '\033[1;34m[attach]\033[0m %s\n' "$*"; }
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)  DRY=1; shift ;;
     --quiet)    QUIET=1; shift ;;
     --symbols)  LIST_SYMBOLS=1; shift ;;
+    --all)      ALL_TERMINALS=1; shift ;;
     -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -184,6 +186,20 @@ else
       warn "automatic compile failed. manually: F4 in MT5 -> MQL5/Experts/TickHarvester.mq5 -> F7"
     fi
   fi
+fi
+
+# ۳ب) --all: اکسپرت را در Experts همه‌ی پروفایل‌های ترمینال بگذار
+if [[ $ALL_TERMINALS -eq 1 && $DRY -eq 0 ]]; then
+  log "installing the EA into every terminal profile:"
+  for prof in "$PREFIX"/drive_c/users/*/AppData/Roaming/MetaQuotes/Terminal/*/; do
+    [[ -d "$prof" ]] || continue
+    mkdir -p "$prof/MQL5/Experts" 2>/dev/null || continue
+    cp -f "$EA_SRC" "$prof/MQL5/Experts/TickHarvester.mq5" 2>/dev/null || continue
+    if [[ -f "$EXPERTS/TickHarvester.ex5" ]]; then
+      cp -f "$EXPERTS/TickHarvester.ex5" "$prof/MQL5/Experts/TickHarvester.ex5" 2>/dev/null || true
+    fi
+    ok "  -> $prof/MQL5/Experts"
+  done
 fi
 
 # ۴) انتخاب نماد
