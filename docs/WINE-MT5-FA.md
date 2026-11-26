@@ -125,6 +125,50 @@ apt policy winehq-stable | head -12          # چه نسخه‌هایی موجو
   بقیهٔ زنجیره (پایتون، گزارش، ژورنال) روی لینوکس می‌ماند و پوشه‌ی `MQL5/Files`
   با share/rsync منتقل می‌شود.
 
+### اگر رجیستری را پاک کردی و باز هم شکست خورد (تجربه‌ی واقعی)
+
+اگر بعد از `fix_mt5_debugger.sh` خروجی این‌طور بود:
+
+```
+0124:fixme:ntdll:NtRaiseHardError 0x50000018 ... stub
+```
+
+یعنی نصب‌کننده به مسیر مرگ‌بار رفته و Wine نتوانسته پنجره‌ی خطا را رسم کند؛
+پاک‌کردن `AeDebug` دردی را دوا نمی‌کند چون **خودِ Wine 11.0** با محافظ MT5
+ناسازگار است. جمع‌بندی گزارش‌های انجمن MQL5:
+
+| Wine | نتیجه با MT5 امروزی |
+|------|---------------------|
+| Ubuntu 9.0 | خطای دیباگر، حتی وسط نصب |
+| **WineHQ 11.0** | خطای دیباگر / کرش بی‌صدا |
+| WineHQ 11.1 و بالاتر (مثلاً 11.6/11.18) | درست کار می‌کند |
+| Wine 10.x | درست کار می‌کند (ولی متاکوتس پشتیبانی نمی‌کند) |
+
+پس راه درست، تغییر **شاخه** است نه پاک‌کردن رجیستری:
+
+```bash
+sudo apt-get install -y --install-recommends winehq-devel   # یا winehq-staging
+wine --version                                              # باید 11.x با x>0 باشد
+```
+
+`winehq-devel` جای `winehq-stable` را می‌گیرد (تضاد دارند و apt خودش stable را
+حذف می‌کند)؛ prefix موجود با اولین اجرا خودش به‌روز می‌شود و چیزی پاک نمی‌شود.
+
+گزینه‌ی جایگزین، نصب‌کننده‌ی رسمی خود متاکوتس است که Wine و MT5 را با هم در
+`~/.mt5` می‌سازد:
+
+```bash
+wget -O ~/Downloads/mt5linux.sh \
+  https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5linux.sh
+chmod +x ~/Downloads/mt5linux.sh
+~/Downloads/mt5linux.sh          # با کاربر معمولی، نه sudo
+```
+
+**هشدار:** این اسکریپت فایل‌های `/etc/apt/sources.list.d/winehq*` را بازنویسی
+می‌کند و `apt upgrade -y` می‌زند؛ اگر WineHQ را دستی تنظیم کرده‌ای، اول از
+`sources.list.d` بکاپ بگیر. مسیر داده‌اش `~/.mt5` است نه `~/Wine`، پس بعد از
+نصب باید `MT5_WINEPREFIX=$HOME/.mt5 ./scripts/connect_harvester.sh` بزنی.
+
 منابع این تشخیص: گزارش‌های انجمن MQL5 دربارهٔ Wine 11 و MT5، و تجربهٔ پروژه‌های
 مشابه که با حذف مقدار `Debugger` از `AeDebug` یا برگشت به Wine 10 حل شده است.
 

@@ -10,6 +10,7 @@
 #   ./scripts/install_mt5_wine.sh
 #   ./scripts/install_mt5_wine.sh --installer ~/Downloads/YourBroker5Setup.exe
 #   ./scripts/install_mt5_wine.sh --installer-url https://example.com/mt5setup.exe
+#   ./scripts/install_mt5_wine.sh --wine-branch devel   # اگر stable = 11.0 بود
 #
 # هیچ رمز، حساب یا سفارشی در این اسکریپت نیست. فقط نصب و مسیرسازی.
 # ---------------------------------------------------------------------------
@@ -20,6 +21,7 @@ INSTALLER_URL="${MT5_INSTALLER_URL:-https://download.mql5.com/cdn/web/metaquotes
 INSTALLER_FILE=""
 DRY_RUN=0
 SKIP_WINE=0
+WINE_PKG="${MT5_WINE_PKG:-winehq-stable}"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tradeagent"
 EA_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/mt5/Experts/TickHarvester.mq5"
 
@@ -47,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --installer-url) INSTALLER_URL="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --skip-wine-install) SKIP_WINE=1; shift ;;
+    --wine-branch) WINE_PKG="winehq-$2"; shift 2 ;;
     -h|--help) usage ;;
     *) die "گزینه ناشناخته: $1" ;;
   esac
@@ -72,7 +75,7 @@ else
 fi
 
 if [[ $SKIP_WINE -eq 0 ]]; then
-  log "۲/۶ نصب Wine (winehq-stable) و winetricks"
+  log "۲/۶ نصب Wine ($WINE_PKG) و winetricks"
   run $SUDO dpkg --add-architecture i386
   run $SUDO mkdir -p /etc/apt/keyrings
   if [[ ! -f /etc/apt/keyrings/winehq-archive.key ]]; then
@@ -97,7 +100,7 @@ Signed-By: /etc/apt/keyrings/winehq-archive.key
 EOF
   fi
   run $SUDO apt-get update
-  run $SUDO apt-get install -y --install-recommends winehq-stable winetricks cabextract
+  run $SUDO apt-get install -y --install-recommends "$WINE_PKG" winetricks cabextract
 else
   log "۲/۶ نصب Wine رد شد (--skip-wine-install)"
 fi
@@ -105,6 +108,22 @@ fi
 for bin in wine wineboot winetricks; do
   command -v "$bin" >/dev/null || warn "$bin در PATH نیست؛ اگر نصب Wine رد شده، دستی نصب کن."
 done
+
+# Wine 11.0 در برابر محافظ ضد-دیباگ MT5 باگ دارد: نصب/اجرا با
+# «A debugger has been found running in your system» یا NtRaiseHardError شکست می‌خورد.
+# ۱۰.x و ۱۱.x بالاتر از ۱۱.۰ سالم‌اند.
+if command -v wine >/dev/null; then
+  WINE_VER="$(wine --version 2>/dev/null | sed 's/^wine-//' || true)"
+  log "نسخه‌ی Wine: ${WINE_VER:-نامشخص}"
+  case "$WINE_VER" in
+    11.0|11.0-*)
+      warn "Wine 11.0 برای MT5 خراب است (خطای دیباگر/کرش نصب‌کننده)."
+      if [[ "${MT5_ALLOW_WINE_11_0:-0}" != "1" ]]; then
+        die "یکی از این دو کار را بکن و دوباره اجرا کن:\n  sudo apt-get install -y --install-recommends winehq-devel\n  ./scripts/install_mt5_wine.sh --wine-branch devel\n(یا: MT5_ALLOW_WINE_11_0=1 برای ادامه‌ی اجباری)"
+      fi
+      ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 log "۳/۶ ساخت prefix تمیز Wine در $PREFIX"
