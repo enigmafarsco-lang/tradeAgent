@@ -582,75 +582,103 @@ print("  processor column (ollama CLI):")
 
 gpu_diag() {
   local lib="${OLLAMA_LIB_DIR:-/usr/local/lib/ollama}"
+  local dri="${DRI_DIR:-/dev/dri}"
+  local icd="${ICD_DIR:-/usr/share/vulkan/icd.d}"
+  local nv_ok=0 vk_ok=0 vk_render=0 vk_icd=0
+
   echo "--- nvidia (CUDA) ---"
   if command -v nvidia-smi >/dev/null 2>&1; then
     if out="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1)"; then
-      echo "  nvidia-smi: $out"
+      echo "  nvidia-smi: $out"; nv_ok=1
     else
       warn "nvidia-smi cannot talk to the driver:"
-      printf '%s\n' "$out" | head -3 | sed 's/^/    /'
+      printf '%s\n' "$out" | head -2 | sed 's/^/    /'
     fi
   else
     echo "  nvidia-smi: not installed"
   fi
   if [[ -r /proc/driver/nvidia/version ]]; then
-    echo "  kernel module: $(head -n1 /proc/driver/nvidia/version)"
+    echo "  kernel module: $(head -n1 /proc/driver/nvidia/version)"; nv_ok=1
   else
-    echo "  kernel module: not loaded (/proc/driver/nvidia/version is missing)"
+    echo "  kernel module: NOT loaded"
   fi
-  if command -v lsmod >/dev/null 2>&1; then
-    echo "  loaded modules: $(lsmod | grep -c '^nvidia') nvidia*"
-  fi
+  command -v modinfo >/dev/null 2>&1 && \
+    echo "  module on disk: $(modinfo -F version nvidia 2>/dev/null || echo 'nvidia.ko not found for this kernel')"
   if command -v dpkg >/dev/null 2>&1; then
-    local pkgs; pkgs="$(dpkg -l 2>/dev/null | awk '/nvidia-driver-[0-9]/{print $2}' | tr '\n' ' ')"
+    local pkgs; pkgs="$(dpkg -l 2>/dev/null | awk '/^ii +nvidia-driver-[0-9.-]*open|^ii +nvidia-driver-[0-9]+/{print $2}' | tr '\n' ' ')"
     echo "  installed driver packages: ${pkgs:-none}"
   fi
-  if command -v ubuntu-drivers >/dev/null 2>&1; then
-    dim "ubuntu-drivers recommends: $(ubuntu-drivers devices 2>/dev/null | grep -m1 recommended | sed 's/^ *//')"
+  if command -v dkms >/dev/null 2>&1; then
+    echo "  dkms: $(dkms status 2>/dev/null | grep -c 'nvidia') entry/entries for nvidia"
   fi
+  if command -v mokutil >/dev/null 2>&1; then
+    echo "  secure boot: $(mokutil --sb-state 2>/dev/null | head -n1)"
+  fi
+  echo "  kernel: $(uname -r)"
 
-  echo "--- intel / vulkan ---"
+  echo "--- intel / amd (vulkan) ---"
+  if [[ -d "$dri" ]]; then
+    vk_render="$(ls "$dri" 2>/dev/null | grep -c '^renderD')"
+    echo "  render nodes: ${vk_render} in $dri ($(ls "$dri" 2>/dev/null | tr '\n' ' '))"
+  else
+    echo "  render nodes: $dri does not exist"
+  fi
+  if [[ -d "$icd" ]]; then
+    vk_icd="$(ls "$icd" 2>/dev/null | grep -c 'icd.*json')"
+    echo "  vulkan icd files: ${vk_icd} ($(ls "$icd" 2>/dev/null | tr '\n' ' '))"
+  else
+    echo "  vulkan icd files: $icd does not exist"
+  fi
   if command -v vulkaninfo >/dev/null 2>&1; then
     local devs
     devs="$(vulkaninfo --summary 2>/dev/null | grep -i 'deviceName' | sed 's/.*= *//' | sort -u | tr '\n' ';')"
-    echo "  vulkan devices: ${devs:-none}"
+    echo "  vulkaninfo: ${devs:-no device}"
+    [[ -n "$devs" ]] && vk_ok=1
   else
-    echo "  vulkaninfo: not installed (sudo apt install vulkan-tools)"
-  fi
-  if command -v dpkg >/dev/null 2>&1; then
-    dpkg -l 2>/dev/null | awk '/mesa-vulkan-drivers/{print "  mesa-vulkan-drivers: " $3}' | head -n1
+    echo "  vulkaninfo: not installed (sudo apt install vulkan-tools to confirm)"
   fi
   echo "  ollama vulkan runner: $(ls "$lib" 2>/dev/null | grep -ci vulkan) file(s) in $lib"
-  echo "  OLLAMA_VULKAN in environment: ${OLLAMA_VULKAN:-unset}"
+  echo "  OLLAMA_VULKAN: ${OLLAMA_VULKAN:-unset}"
 
   echo "--- verdict ---"
-  local mode="CPU only"
-  if [[ -r /proc/driver/nvidia/version ]] && nvidia-smi >/dev/null 2>&1; then
-    mode="NVIDIA CUDA available"
-  elif [[ "$(ls "$lib" 2>/dev/null | grep -ci vulkan)" -gt 0 ]]; then
-    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary 2>/dev/null | grep -qi 'deviceName'; then
-      mode="Intel/AMD via Vulkan available"
-    else
-      mode="ollama has Vulkan support but no working Vulkan device was found"
-    fi
+  if (( nv_ok )); then
+    ok "NVIDIA CUDA is usable"
+    echo "  restart ollama once, then check: ./scripts/setup_llm.sh --hardware"
+  elif (( vk_ok )) || { (( vk_render > 0 )) && (( vk_icd > 0 )); }; then
+    ok "a Vulkan device looks usable (Intel/AMD)"
+    echo "  ./scripts/setup_llm.sh --gpu-vulkan      # OLLAMA_VULKAN=1 + restart, then proof via ollama ps"
+  elif (( vk_render > 0 )); then
+    warn "render node exists but no Vulkan driver (ICD) is installed"
+    echo "  sudo apt install mesa-vulkan-drivers vulkan-tools"
+  else
+    bad "no GPU compute path right now - ollama will use the CPU"
   fi
-  echo "  $mode"
-  case "$mode" in
-    "CPU only")
-      echo "  fix for the NVIDIA card (RTX 4050):"
-      echo "    sudo ubuntu-drivers install      # installs the recommended driver"
-      echo "    sudo reboot                      # the kernel module must load"
-      echo "  fix for the Intel Arc iGPU (no reboot, no NVIDIA driver):"
-      echo "    sudo apt install mesa-vulkan-drivers vulkan-tools"
-      echo "    ./scripts/setup_llm.sh --gpu-vulkan"
-      ;;
-    *Vulkan*)
-      echo "  try: ./scripts/setup_llm.sh --gpu-vulkan   # sets OLLAMA_VULKAN=1 and restarts"
-      ;;
-    *CUDA*)
-      echo "  nothing to do: nvidia-smi talks to the driver, ollama will use CUDA on restart"
-      ;;
-  esac
+
+  if ! (( nv_ok )); then
+    echo "--- if the NVIDIA module refuses to load ---"
+    echo "  sudo modprobe nvidia                # prints the real reason"
+    if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+      warn "Secure Boot is ON: unsigned DKMS modules are refused. Either enrol the MOK key"
+      warn "(the password prompt shown during driver install) or switch Secure Boot off."
+    fi
+    local nvpkgs keep
+    nvpkgs="$(dpkg -l 2>/dev/null | awk '/^ii +nvidia-driver-/{print $2}' | tr '\n' ' ')"
+    keep="$(ubuntu-drivers devices 2>/dev/null | grep -m1 recommended | grep -o 'nvidia-driver-[0-9a-z-]*' | head -n1)"
+    if [[ -n "$nvpkgs" ]]; then
+      local count; count="$(echo $nvpkgs | wc -w)"
+      echo "  installed: $nvpkgs($count package(s))"
+      if (( count > 1 )); then
+        warn "more than one NVIDIA driver is installed - they fight over the module"
+        echo "  keep ${keep:-the newest} and remove the rest:"
+        for one in $nvpkgs; do
+          [[ -n "$keep" && "$one" == "$keep" ]] && continue
+          echo "    sudo apt purge $one"
+        done
+      fi
+      echo "    sudo apt install --reinstall ${keep:-nvidia-dkms-595-open} nvidia-dkms-$(echo ${keep:-595} | grep -o '[0-9]\+')"
+    fi
+    echo "    sudo reboot"
+  fi
   dim "note: the Meteor Lake NPU is not supported by Ollama - ignore it for now"
 }
 
