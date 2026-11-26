@@ -145,7 +145,7 @@ systemctl --user start tradeagent-loop
 
 ```bash
 ./scripts/setup_llm.sh --status          # الان چه چیزی فعال است؟
-./scripts/setup_llm.sh --gemini AIza...  # کلید Gemini را تست و در .env ثبت می‌کند
+./scripts/setup_llm.sh            # کلید را می‌پرسد، تست می‌کند، در .env ثبت می‌کند
 ./scripts/setup_llm.sh --ollama          # ollama + مدل پیش‌فرض را آماده می‌کند
 ./scripts/setup_llm.sh --off             # فقط تصمیم قطعی
 ```
@@ -170,8 +170,8 @@ systemctl --user start tradeagent-loop
 ### گرفتن کلید Gemini رایگان (بدون کارت)
 
 1. برو به <https://aistudio.google.com/apikey> با همان حساب گوگل.
-2. `Create API key` → یک کلید با پیشوند `AIza` و حدود ۳۹ کاراکتر.
-3. همان را بده: `./scripts/setup_llm.sh --gemini AIza...`
+2. `Create API key` → کلید با آیکن کپی بردار (فرمت‌ها: `AIza…` ~۳۹ کاراکتر یا `AQ.Ab8…` ~۵۳ کاراکتر).
+3. همان را بده: `./scripts/setup_llm.sh` و در پیام مخفی بچسبان.
    اسکریپت اول با یک درخواست کوچک تست می‌کند، بعد ذخیره می‌کند. اگر شبکه بسته
    باشد پیام جدا می‌دهد (نه «کلید بد»).
 

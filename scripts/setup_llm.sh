@@ -11,7 +11,9 @@
 #   ./scripts/setup_llm.sh --off                 deterministic decisions only
 #
 # Free Gemini key: https://aistudio.google.com/apikey   (no card, free tier)
-# Real key shape: starts with AIza, ~39 chars, letters/digits/-/_ only.
+# Any printable key of 20+ chars is accepted and sent to Google as-is: AI Studio
+# hands out both 'AIza...' (~39 chars) and the newer 'AQ.Ab8...' (~53) formats, so the
+# provider - not this script - decides whether a key is valid.
 # ---------------------------------------------------------------------------
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,10 +57,10 @@ not_a_key_reason() {   # چاپ دلیل یا رشته‌ی خالی اگر مع
   if printf '%s' "$k" | LC_ALL=C grep -qP '[^\x20-\x7e]'; then
     echo "non-ascii"; return; fi
   case "$k" in
-    *"..."*|*"…"*|*YOUR*|*your*|*PASTE*|*KEY*|*xxx*|*XXX*|*EXAMPLE*|*placeholder*)
+    *"..."*|*"…"*|*YOUR*|*your*|*PASTE*|*PLACEHOLDER*|*placeholder*|*EXAMPLE*|*xxx*|*XXX*)
       echo "placeholder"; return ;;
   esac
-  if [[ ! "$k" =~ ^AIza[0-9A-Za-z_-]{30,}$ ]]; then echo "shape"; return; fi
+  if [[ ${#k} -lt 20 ]]; then echo "shape"; return; fi
   echo ""
 }
 
@@ -259,11 +261,11 @@ do_gemini() {
   case "$why" in
     empty) bad "nothing was pasted"; return 2;;
     non-ascii) bad "that text contains non-ASCII characters - it is a placeholder from the chat, not a key"
-               dim "a real key is A-Z a-z 0-9 - _ and starts with AIza"; return 2;;
+               dim "a key is only printable ASCII: A-Z a-z 0-9 . _ -"; return 2;;
     placeholder) bad "that is a placeholder, not a key: '$clean'"
                dim "free key: https://aistudio.google.com/apikey"; return 2;;
     shape) bad "this is not the shape of a Gemini key: $(mask "$clean")"
-           dim "expected AIza + ~35 more chars (letters, digits, - or _), total ~39"
+           dim "a key is at least 20 printable characters (AI Studio emits 'AIza…' or 'AQ.Ab8…')"
            dim "in AI Studio the key is shown once - press the copy icon, not a screenshot"
            return 2;;
   esac
