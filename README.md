@@ -48,7 +48,7 @@
 ## شروع سریع (۵ دقیقه، بدون متاتریدر)
 
 ```bash
-cd tradeAgent
+cd tradeAgent          # مثلاً ~/Documents/GitHub/tradeAgent اگر با GitHub Desktop کلون کردی
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 .venv/bin/tradeagent init          # configs/local.toml + پوشه‌ها

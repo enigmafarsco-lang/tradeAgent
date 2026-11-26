@@ -14,6 +14,10 @@
   می‌آید (`README.md`, `src/`, `mt5/`, `scripts/`, …).
 * `cd` = «برو داخل این پوشه». بعد از `cd`، دستورهای بعدی (venv، pytest، tradeagent)
   در همان پوشه اجرا می‌شوند.
+* اگر با **GitHub Desktop** کلون کردی، مسیر معمولاً
+  `~/Documents/GitHub/tradeAgent` است (نه `~/projects/tradeAgent`). هر جا در این
+  سند `~/projects/tradeAgent` دیدی، مسیر خودت را بگذار؛ هیچ دستوری به مسیر
+  خاصی وابسته نیست.
 * تا وقتی `git clone` را اجرا نکرده‌ای، این پوشه **وجود ندارد** و `cd` خطای
   `No such file or directory` می‌دهد — طبیعی است.
 
