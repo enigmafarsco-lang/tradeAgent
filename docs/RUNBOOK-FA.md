@@ -164,6 +164,26 @@ systemctl --user start tradeagent-loop
 * `0 GB on the GPU -> CPU only` یعنی مدل با پردازنده اجرا می‌شود؛ GPU لازم نیست.
 * `5.0 GB on the GPU -> GPU` یعنی واقعاً روی کارت گرافیک است (`size_vram`).
 
+### GPU: چرا مدل روی CPU است
+
+```bash
+./scripts/setup_llm.sh --gpu
+```
+
+سه چیز را جدا می‌گوید: وضعیت درایور NVIDIA (`nvidia-smi` + ماژول کرنل + بسته‌ها +
+پیشنهاد `ubuntu-drivers`)، دستگاه‌های Vulkan (برای Intel Arc / Iris Xe)، و اینکه
+آیا بستهٔ Ollama اصلاً runner ولکان دارد.
+
+| وضعیت | راه |
+|---|---|
+| `nvidia-smi` خطای «couldn't communicate with the driver» | `sudo ubuntu-drivers install` و بعد `sudo reboot` |
+| Intel Arc موجود و Vulkan نصب است | `sudo apt install mesa-vulkan-drivers vulkan-tools` سپس `./scripts/setup_llm.sh --gpu-vulkan` |
+| NPU اینتل (Meteor Lake) | پشتیبانی نمی‌شود؛ دنبالش نرو |
+
+`--gpu-vulkan` دو متغیر را در سرویس کاربری می‌گذارد (`OLLAMA_VULKAN=1`,
+`OLLAMA_IGPU_ENABLE=1`)، ری‌استارت می‌کند و با `ollama ps` / `size_vram` نشان می‌دهد
+که واقعاً روی GPU رفت یا نه.
+
 ### سرویس ماندگار Ollama
 
 اگر `systemctl restart ollama` بگوید `Unit ollama.service not found`، یعنی سرویس

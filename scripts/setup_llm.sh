@@ -9,6 +9,8 @@
 #   ./scripts/setup_llm.sh --install-ollama      install ollama (sudo) + pull the model
 #   ./scripts/setup_llm.sh --repair-ollama       fix a half-finished install (llama-server missing)
 #   ./scripts/setup_llm.sh --hardware            CPU/RAM/GPU and what ollama really uses
+#   ./scripts/setup_llm.sh --gpu                 why the GPU is (not) being used
+#   ./scripts/setup_llm.sh --gpu-vulkan          use the Intel/AMD GPU through Vulkan
 #   ./scripts/setup_llm.sh --ollama [model]      use an ollama that is already installed
 #   ./scripts/setup_llm.sh --off                 deterministic decisions only
 #
@@ -578,6 +580,142 @@ print("  processor column (ollama CLI):")
   return 0
 }
 
+gpu_diag() {
+  local lib="${OLLAMA_LIB_DIR:-/usr/local/lib/ollama}"
+  echo "--- nvidia (CUDA) ---"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    if out="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1)"; then
+      echo "  nvidia-smi: $out"
+    else
+      warn "nvidia-smi cannot talk to the driver:"
+      printf '%s\n' "$out" | head -3 | sed 's/^/    /'
+    fi
+  else
+    echo "  nvidia-smi: not installed"
+  fi
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    echo "  kernel module: $(head -n1 /proc/driver/nvidia/version)"
+  else
+    echo "  kernel module: not loaded (/proc/driver/nvidia/version is missing)"
+  fi
+  if command -v lsmod >/dev/null 2>&1; then
+    echo "  loaded modules: $(lsmod | grep -c '^nvidia') nvidia*"
+  fi
+  if command -v dpkg >/dev/null 2>&1; then
+    local pkgs; pkgs="$(dpkg -l 2>/dev/null | awk '/nvidia-driver-[0-9]/{print $2}' | tr '\n' ' ')"
+    echo "  installed driver packages: ${pkgs:-none}"
+  fi
+  if command -v ubuntu-drivers >/dev/null 2>&1; then
+    dim "ubuntu-drivers recommends: $(ubuntu-drivers devices 2>/dev/null | grep -m1 recommended | sed 's/^ *//')"
+  fi
+
+  echo "--- intel / vulkan ---"
+  if command -v vulkaninfo >/dev/null 2>&1; then
+    local devs
+    devs="$(vulkaninfo --summary 2>/dev/null | grep -i 'deviceName' | sed 's/.*= *//' | sort -u | tr '\n' ';')"
+    echo "  vulkan devices: ${devs:-none}"
+  else
+    echo "  vulkaninfo: not installed (sudo apt install vulkan-tools)"
+  fi
+  if command -v dpkg >/dev/null 2>&1; then
+    dpkg -l 2>/dev/null | awk '/mesa-vulkan-drivers/{print "  mesa-vulkan-drivers: " $3}' | head -n1
+  fi
+  echo "  ollama vulkan runner: $(ls "$lib" 2>/dev/null | grep -ci vulkan) file(s) in $lib"
+  echo "  OLLAMA_VULKAN in environment: ${OLLAMA_VULKAN:-unset}"
+
+  echo "--- verdict ---"
+  local mode="CPU only"
+  if [[ -r /proc/driver/nvidia/version ]] && nvidia-smi >/dev/null 2>&1; then
+    mode="NVIDIA CUDA available"
+  elif [[ "$(ls "$lib" 2>/dev/null | grep -ci vulkan)" -gt 0 ]]; then
+    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary 2>/dev/null | grep -qi 'deviceName'; then
+      mode="Intel/AMD via Vulkan available"
+    else
+      mode="ollama has Vulkan support but no working Vulkan device was found"
+    fi
+  fi
+  echo "  $mode"
+  case "$mode" in
+    "CPU only")
+      echo "  fix for the NVIDIA card (RTX 4050):"
+      echo "    sudo ubuntu-drivers install      # installs the recommended driver"
+      echo "    sudo reboot                      # the kernel module must load"
+      echo "  fix for the Intel Arc iGPU (no reboot, no NVIDIA driver):"
+      echo "    sudo apt install mesa-vulkan-drivers vulkan-tools"
+      echo "    ./scripts/setup_llm.sh --gpu-vulkan"
+      ;;
+    *Vulkan*)
+      echo "  try: ./scripts/setup_llm.sh --gpu-vulkan   # sets OLLAMA_VULKAN=1 and restarts"
+      ;;
+    *CUDA*)
+      echo "  nothing to do: nvidia-smi talks to the driver, ollama will use CUDA on restart"
+      ;;
+  esac
+  dim "note: the Meteor Lake NPU is not supported by Ollama - ignore it for now"
+}
+
+enable_vulkan() {
+  local dir="$HOME/.config/systemd/user" unit="$HOME/.config/systemd/user/ollama.service" bin
+  bin="$(command -v ollama 2>/dev/null)"
+  [[ -n "$bin" ]] || { bad "ollama is not on PATH"; return 1; }
+  command -v systemctl >/dev/null 2>&1 || { bad "systemctl is missing - cannot manage a service"; return 1; }
+
+  mkdir -p "$dir"
+  if [[ ! -f "$unit" ]]; then
+    warn "no user unit yet - creating one first"
+    ensure_ollama_unit >/dev/null
+  fi
+  [[ -f "$unit" ]] || { bad "could not create $unit"; return 1; }
+
+  if ! grep -q '^Environment=OLLAMA_VULKAN=1' "$unit"; then
+    python3 - "$unit" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text().splitlines()
+out, done = [], False
+for ln in lines:
+    out.append(ln)
+    if ln.startswith("ExecStart=") and not done:
+        out.append("Environment=OLLAMA_VULKAN=1")
+        out.append("Environment=OLLAMA_IGPU_ENABLE=1")
+        done = True
+p.write_text("\n".join(out) + "\n")
+PY
+    ok "added OLLAMA_VULKAN=1 and OLLAMA_IGPU_ENABLE=1 to $(basename "$unit")"
+  else
+    dim "OLLAMA_VULKAN=1 is already in the unit"
+  fi
+  systemctl --user daemon-reload 2>/dev/null
+  if ! systemctl --user restart ollama.service 2>/dev/null; then
+    bad "could not restart the user unit"; return 1
+  fi
+  wait_ollama 60 || { bad "server did not come back"; return 1; }
+  ok "restarted with Vulkan enabled"
+
+  local model="${1:-$(env_get TRADEAGENT_OLLAMA_MODEL)}"
+  model="${model:-$DEFAULT_OLLAMA}"
+  ollama_models | grep -qx "$model" || ollama pull "$model" || true
+  ollama_probe "$model" >/dev/null
+  sleep 1
+  echo "--- ollama ps ---"
+  ollama ps 2>/dev/null | sed 's/^/  /'
+  local vram
+  vram="$(curl -s --max-time 5 "$OLLAMA_URL/api/ps" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for m in d.get("models",[]):
+    print(m.get("size_vram") or 0)
+' 2>/dev/null | head -n1)"
+  if [[ "${vram:-0}" -gt 0 ]]; then
+    ok "the model is now on a GPU ($(awk -v v="$vram" 'BEGIN{printf "%.1f", v/1e9}') GB in VRAM)"
+    return 0
+  fi
+  warn "still CPU only. Check that a Vulkan device exists: vulkaninfo --summary | head"
+  warn "Vulkan device memory reporting on Linux may also need: sudo setcap cap_perfmon+ep $bin"
+  return 2
+}
+
 script_version() {
   git -C "$ROOT" log -1 --format=%h -- scripts/setup_llm.sh 2>/dev/null || echo unknown
 }
@@ -737,6 +875,8 @@ do_gemini() {
 case "${1:-}" in
   --status) status ;;
   --hardware|--hw) hardware; exit $? ;;
+  --gpu) gpu_diag; exit 0 ;;
+  --gpu-vulkan) shift; enable_vulkan "${1:-}"; exit $? ;;
   "") interactive ;;
 
   --gemini) shift; do_gemini "$@" ;;

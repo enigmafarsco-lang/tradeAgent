@@ -54,6 +54,20 @@
 `/api/chat` می‌سنجد (نه فقط فهرست مدل‌ها)، بعد گوگل، و اگر گوگل سهمیه نداشت
 خودکار به مدل محلی سوییچ می‌کند.
 
+## سخت‌افزار این ماشین (اندازه‌گیری‌شده)
+
+| جزء | مقدار |
+|---|---|
+| CPU | Intel Core Ultra 7 155H, 22 رشته |
+| RAM | 30.7 GB |
+| iGPU | Intel Arc Graphics (Meteor Lake) |
+| dGPU | NVIDIA RTX 4050 Max-Q — **درایور در دسترس نیست** (`nvidia-smi` خطا) |
+| NPU | Meteor Lake — Ollama پشتیبانی نمی‌کند |
+| اجرای فعلی مدل | `100% CPU` (`size_vram = 0`) |
+
+دو راه برای GPU: نصب درایور NVIDIA (`ubuntu-drivers install` + ریبوت) یا استفاده از
+Arc با Vulkan (`mesa-vulkan-drivers` + `--gpu-vulkan`). هر دو sudo می‌خواهند.
+
 ## نگهبان ضبط (watchdog)
 
 `scripts/watch_harvester.sh` ضربان `status.json` و تازه‌ترین فایل تیک را می‌سنجد:
