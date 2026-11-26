@@ -246,35 +246,68 @@ info_key_ok() {
 }
 
 interactive() {
-  local k usable=0
+  local k provider om rc usable=0
   k="$(env_get GEMINI_API_KEY)"
+  provider="$(env_get TRADEAGENT_LLM_PROVIDER)"
+  om="$(env_get TRADEAGENT_OLLAMA_MODEL)"; om="${om:-$DEFAULT_OLLAMA}"
   [[ -n "$k" ]] && [[ -z "$(not_a_key_reason "$(sanitize "$k")")" ]] && usable=1
 
+  # ۰) اگر انتخاب فعلی ollama است و جواب می‌دهد، همین کافی است
+  if [[ "$provider" == "ollama" ]] && command -v ollama >/dev/null; then
+    if om_out="$(ollama_probe "$om")"; then
+      ok "local model works: $om  ->  $om_out"
+      echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
+      return 0
+    fi
+    warn "provider is ollama but $om did not answer"
+  fi
+
+  # ۱) گوگل
+  local gemini_rc=9
   if (( usable )); then
     echo "stored key: $(mask "$(sanitize "$k")")"
     gemini_probe "$(sanitize "$k")"
-    local rc=$?
-    case $rc in
-      0) local stored; stored="$(env_get TRADEAGENT_LLM_MODEL)"
-         if [[ "$stored" != "$GEMINI_MODEL_OK" ]]; then
+    gemini_rc=$?
+    case $gemini_rc in
+      0) ok "works with $GEMINI_MODEL_OK - nothing to do"
+         local stored; stored="$(env_get TRADEAGENT_LLM_MODEL)"
+         if [[ -n "$stored" && "$stored" != "$GEMINI_MODEL_OK" ]]; then
            set_env TRADEAGENT_LLM_MODEL "$GEMINI_MODEL_OK"
-           ok "key is fine; model updated ${stored:-<none>} -> $GEMINI_MODEL_OK"
-         else
-           ok "works with $GEMINI_MODEL_OK - nothing to do"
+           ok "model updated $stored -> $GEMINI_MODEL_OK"
          fi
-         echo "    restart the loop if you changed anything: systemctl --user restart tradeagent-loop.service"
          return 0 ;;
-      1) report_failure "the stored key was rejected"; dim "paste a fresh one below" ;;
-      4|5) info_key_ok; return 0 ;;
       2) warn "network: generativelanguage.googleapis.com is not reachable from here" ;;
-      *) report_failure "unexpected answer" ;;
+      4|5) warn "Google has no quota/capacity for these models right now" ;;
+      *) report_failure "the stored key was rejected" ;;
     esac
   fi
 
-  if ollama_up && curl -s "$OLLAMA_URL/api/tags" | grep -q '"name"'; then
-    ok "a local Ollama server is running at $OLLAMA_URL"
+  # ۲) اگر گوگل به سهمیه خورد، مدل محلی آماده است؟ خودکار برو سراغش
+  if command -v ollama >/dev/null; then
+    if ! ollama_up; then
+      warn "starting the local ollama server"
+      (nohup ollama serve >/tmp/ollama.log 2>&1 &) ; sleep 3
+    fi
+    if ollama_up; then
+      # مدلی که در .env است، وگرنه هر مدلی که نصب است
+      local try_models="$om $(ollama_models | tr '\n' ' ')"
+      for cand in $try_models; do
+        [[ -z "$cand" ]] && continue
+        if out="$(ollama_probe "$cand")"; then
+          set_env TRADEAGENT_LLM_PROVIDER ollama
+          set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
+          set_env TRADEAGENT_OLLAMA_MODEL "$cand"
+          ok "switched to the local model: $cand  ->  $out"
+          ok "now: systemctl --user restart tradeagent-loop.service"
+          return 0
+        fi
+      done
+      warn "ollama is running but no installed model answered"
+      dim "installed: $(ollama_models | tr '\n' ' ')"
+    fi
   fi
 
+  # ۳) هیچ‌کدام: بپرس
   echo
   printf '\033[1m[llm] paste your Gemini key and press Enter (hidden): \033[0m'
   local typed
@@ -282,18 +315,14 @@ interactive() {
   echo
 
   if [[ -z "$typed" ]]; then
-    if command -v ollama >/dev/null && ollama_up; then
-      warn "no key given -> using the local Ollama that is already running"
-      local m; m="$(curl -s "$OLLAMA_URL/api/tags" | grep -o '\"name\":\"[^\"]*' | head -n1 | cut -d'"' -f4)"
-      set_env TRADEAGENT_LLM_PROVIDER ollama
-      set_env TRADEAGENT_OLLAMA_MODEL "${m:-$DEFAULT_OLLAMA}"
-      ok "provider=ollama model=${m:-$DEFAULT_OLLAMA}"
-      return 0
-    fi
-    printf '[llm] nothing typed. install the local model instead? [y/N] '
-    local a; read -r a
-    if [[ "${a:-n}" =~ ^[Yy]$ ]]; then
-      exec "$0" --install-ollama
+    if command -v ollama >/dev/null; then
+      printf '[llm] pull a local model now? [y/N] '
+      local a; read -r a
+      if [[ "${a:-n}" =~ ^[Yy]$ ]]; then exec "$0" --install-ollama; fi
+    else
+      printf '[llm] nothing typed. install the local model instead? [y/N] '
+      local a; read -r a
+      if [[ "${a:-n}" =~ ^[Yy]$ ]]; then exec "$0" --install-ollama; fi
     fi
     warn "left as is: cycles keep running with deterministic decisions"
     return 1
@@ -306,6 +335,35 @@ script_version() {
 }
 
 ollama_up() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" | grep -q '"models"'; }
+
+ollama_models() { curl -s --max-time 5 "$OLLAMA_URL/api/tags" \
+  | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for m in d.get("models",[]): print(m.get("name",""))' 2>/dev/null; }
+
+# 0 = پاسخ JSON سالم داد، 1 = سرور نیست، 2 = مدل نیست، 3 = پاسخ بی‌معنی
+ollama_probe() {
+  local model="$1" body ans
+  ollama_up || return 1
+  ollama_models | grep -qx "$model" || return 2
+  body="$(curl -s --max-time 120 -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$model\",\"stream\":false,\"format\":\"json\",\"options\":{\"temperature\":0},\"messages\":[{\"role\":\"user\",\"content\":\"Reply with JSON: {\\\"ok\\\":true} and nothing else.\"}]}" \
+    "$OLLAMA_URL/api/chat" 2>/dev/null)"
+  ans="$(printf '%s' "$body" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+c=(d.get("message") or {}).get("content","")
+try:
+    json.loads(c); print(c[:80])
+except Exception:
+    print("")
+' 2>/dev/null)"
+  [[ -n "$ans" ]] || return 3
+  printf '%s' "$ans"
+  return 0
+}
 
 status() {
   echo "--- script ---"
@@ -338,7 +396,10 @@ status() {
   command -v ollama >/dev/null && ok "binary: $(command -v ollama)" || warn "binary: not installed"
   if ollama_up; then
     ok "server: reachable at $OLLAMA_URL"
-    curl -s "$OLLAMA_URL/api/tags" | tr ',' '\n' | grep -o '"name":"[^"]*"' | head -5 | sed 's/^/    /'
+    echo "    installed: $(ollama_models | tr '\n' ' ')"
+    local cur; cur="$(env_get TRADEAGENT_OLLAMA_MODEL)"; cur="${cur:-$DEFAULT_OLLAMA}"
+    if out="$(ollama_probe "$cur")"; then ok "model $cur answers: $out"
+    else warn "model $cur did not answer with JSON"; fi
   else warn "server: not reachable at $OLLAMA_URL"; fi
   echo
   echo "without either, cycles still run - decisions stay deterministic."
@@ -439,7 +500,11 @@ print("available   :", ", ".join(ms[:8]))
     set_env TRADEAGENT_LLM_PROVIDER ollama
     set_env TRADEAGENT_OLLAMA_MODEL "$DEFAULT_OLLAMA"
     set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
-    ok "provider=ollama model=$DEFAULT_OLLAMA"
+    if out="$(ollama_probe "$DEFAULT_OLLAMA")"; then
+      ok "local model answered with JSON: $out"
+    else
+      warn "model is pulled but the test answer was unusable - the loop will fall back to deterministic"
+    fi
     ok "now: systemctl --user restart tradeagent-loop.service" ;;
 
   --ollama)
@@ -447,10 +512,18 @@ print("available   :", ", ".join(ms[:8]))
     command -v ollama >/dev/null || { bad "not installed; run: ./scripts/setup_llm.sh --install-ollama"; exit 1; }
     ollama_up || { (nohup ollama serve >/tmp/ollama.log 2>&1 &); sleep 3; }
     ollama_up || { bad "cannot reach $OLLAMA_URL"; exit 1; }
-    curl -s "$OLLAMA_URL/api/tags" | grep -q "\"$model\"" || ollama pull "$model" || exit 1
-    set_env TRADEAGENT_LLM_PROVIDER ollama
-    set_env TRADEAGENT_OLLAMA_MODEL "$model"
-    ok "provider=ollama model=$model" ;;
+    ollama_models | grep -qx "$model" || ollama pull "$model" || exit 1
+    if out="$(ollama_probe "$model")"; then
+      set_env TRADEAGENT_LLM_PROVIDER ollama
+      set_env TRADEAGENT_OLLAMA_URL "$OLLAMA_URL"
+      set_env TRADEAGENT_OLLAMA_MODEL "$model"
+      ok "provider=ollama model=$model"
+      ok "answered with JSON: $out"
+      ok "now: systemctl --user restart tradeagent-loop.service"
+    else
+      bad "ollama has $model but it did not answer with JSON"
+      exit 1
+    fi ;;
 
   --off) set_env TRADEAGENT_LLM_PROVIDER none; ok "provider=none (deterministic only)" ;;
 
