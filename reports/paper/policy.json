@@ -3,25 +3,25 @@
     "variant": "momentum",
     "params": {
       "lookback_s": 300,
-      "breakout_k": 1.0,
+      "breakout_k": 1.2,
       "sl_atr": 1.2,
       "rr": 1.2,
       "hold_s": 600,
-      "min_edge_bps": 1.5,
+      "min_edge_bps": 1.8,
       "max_spread_bps": 5.0,
       "cooldown_s": 480,
       "z_entry": 1.8,
       "max_vol_bps": 35.0
     },
     "level": 5,
-    "generation": 7,
-    "version": 8,
+    "generation": 8,
+    "version": 9,
     "source": "llm",
-    "reason": "近期K线波动较大，适合寻找趋势",
+    "reason": "momentum confirmed by ticks",
     "risk_scale": 1.0
   },
   "next": {
-    "variant": "momentum",
+    "variant": "meanrev",
     "params": {
       "lookback_s": 300,
       "breakout_k": 1.0,
@@ -30,16 +30,16 @@
       "hold_s": 600,
       "min_edge_bps": 1.5,
       "max_spread_bps": 5.0,
-      "cooldown_s": 480,
+      "cooldown_s": 240,
       "z_entry": 1.8,
       "max_vol_bps": 35.0
     },
-    "level": 5,
-    "generation": 7,
-    "version": 8,
-    "source": "llm",
-    "reason": "近期K线波动较大，适合寻找趋势",
+    "level": 4,
+    "generation": 9,
+    "version": 10,
+    "source": "adaptive",
+    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑) • فیلتر هزینه سخت‌تر (سقف اسپرد ↓، فاصله بین ورودها ↑) • فاصله‌ی استاپ ↑ و هدف نزدیک‌تر (کاهش نویز-استاپ) • تغییر خانواده‌ی استراتژی",
     "risk_scale": 1.0
   },
-  "ts": "2026-11-27T14:37:50Z"
+  "ts": "2026-11-27T14:52:23Z"
 }
