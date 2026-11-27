@@ -90,19 +90,48 @@ if ! systemctl --user show-environment >/dev/null 2>&1; then
   exit 1
 fi
 
-step "۲) قطع سرویس عمومی (تا دو نمونه هم‌زمان نباشند)"
-if systemctl --user is-active tradeagent-loop.service >/dev/null 2>&1; then
-  systemctl --user disable --now tradeagent-loop.service 2>/dev/null && ok "tradeagent-loop.service خوابید"
+step "۲) قطع نمونه‌های قبلی (تا دو نمونه هم‌زمان نباشند)"
+systemctl --user is-active tradeagent-loop.service >/dev/null 2>&1 \
+  && systemctl --user disable --now tradeagent-loop.service 2>/dev/null \
+  && ok "tradeagent-loop.service خوابید" \
+  || dim "سرویس عمومی فعال نبود"
+
+# نمونه‌های دستی را با الگوی خودِ پروسه پیدا کن، نه فقط با فایل قفل.
+# الگو لنگر دارد (^) تا شل خودمان یا دستورهای دیگر که این مسیر را در متن دارند نگیرد.
+mapfile -t strays < <(
+  {
+    pgrep -f "^$ROOT/.venv/bin/tradeagent" 2>/dev/null || true
+    pgrep -f "^$ROOT/.venv/bin/python.*-m tradeagent" 2>/dev/null || true
+  } | grep -v -x -e "$$" -e "$PPID" | sort -u
+)
+if (( ${#strays[@]} )); then
+  warn "نمونهٔ در حال اجرا: ${strays[*]} - SIGTERM می‌فرستم (تا پایان چرخهٔ جاری)"
+  kill "${strays[@]}" 2>/dev/null || true
+  for _ in $(seq 1 20); do              # حداکثر ۲۰ ثانیه
+    alive=()
+    for pid in "${strays[@]}"; do kill -0 "$pid" 2>/dev/null && alive+=("$pid"); done
+    (( ${#alive[@]} )) || break
+    sleep 1
+  done
+  if (( ${#alive[@]} )); then
+    bad "این نمونه‌ها هنوز زنده‌اند: ${alive[*]}"
+    bad "یک چرخهٔ مدل ممکن است طول بکشد؛ چند لحظه بعد همین دستور را دوباره بزن."
+    exit 1
+  fi
+  ok "همه بسته شدند"
 else
-  dim "سرویس عمومی فعال نبود"
+  dim "نمونهٔ دیگری در حال اجرا نبود"
 fi
-PID="$(awk '{print $1}' var/loop.lock 2>/dev/null || true)"
-if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then
-  warn "یک نمونهٔ دستی (pid $PID) هنوز در حال اجراست - همان را می‌بندم"
-  kill "$PID" 2>/dev/null || true
-  sleep 2
+
+# فایل قفل فقط وقتی پاک شود که صاحبش واقعاً مرده باشد (وگرنه دو نمونه هم‌زمان می‌شوند)
+if [[ -f var/loop.lock ]]; then
+  PID="$(awk '{print $1}' var/loop.lock 2>/dev/null || true)"
+  if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then
+    warn "قفل دست pid $PID است و زنده است؛ صبر می‌کنم تا خودش برود"
+    exit 1
+  fi
+  rm -f var/loop.lock
 fi
-rm -f var/loop.lock
 
 step "۳) نصب سرویس طلا"
 mkdir -p "$DIR"
@@ -125,10 +154,41 @@ systemctl --user daemon-reload 2>/dev/null
 systemctl --user enable --now tradeagent-gold.service 2>/dev/null || { bad "فعال نشد"; exit 1; }
 ok "tradeagent-gold.service فعال شد (هر ${INTERVAL}s)"
 
-step "۴) وضعیت پس از ۲۰ ثانیه"
-sleep 20
-systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 \
-  && ok "سرویس در حال اجراست" || bad "سرویس بالا نیامد"
+step "۴) بررسی آمادگی (تا ۶۰ ثانیه)"
+START_STAMP="$(date +%s)"
+READY=0
+for _ in $(seq 1 12); do
+  sleep 5
+  systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 || { READY=-1; break; }
+  if [[ -f var/state/mcp_status.json ]]; then
+    MTIME="$(stat -c %Y var/state/mcp_status.json 2>/dev/null || echo 0)"
+    (( MTIME >= START_STAMP - 5 )) && { READY=1; break; }
+  fi
+done
+
+case "$READY" in
+  1)
+    ok "سرویس در حال اجراست و وضعیت پل MCP را منتشر کرد"
+    python3 - <<'PY' 2>/dev/null || true
+import json, pathlib
+d = json.loads(pathlib.Path("var/state/mcp_status.json").read_text(encoding="utf-8"))
+b = d.get("bridge") or {}
+t = d.get("terminal") or {}
+a = d.get("account") or {}
+print(f"  bridge={b.get('listen')} ea_connected={b.get('ea_connected')}")
+if a:
+    print(f"  account={a.get('login')} server={a.get('server')} balance={a.get('balance')}")
+if not b.get("ea_connected"):
+    print("  اکسپرت وصل نیست: در متاتریدر TradeMCPConnector را روی چارت XAUUSD_i بگذار")
+PY
+    ;;
+  0)
+    warn "سرویس فعال است ولی وضعیت پل MCP هنوز منتشر نشد (شاید چرخهٔ اول مشغول مدل است)"
+    ;;
+  *)
+    bad "سرویس بالا نیامد - دلیل در لاگ زیر است"
+    ;;
+esac
 journalctl --user -u tradeagent-gold.service -n 12 --no-pager 2>/dev/null | sed 's/^/  /'
 
 step "گام بعدی"

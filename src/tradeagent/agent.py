@@ -98,6 +98,7 @@ class AgentTrace:
     calls: list[ToolCallRecord] = field(default_factory=list)
     rounds: int = 0
     error: str = ""
+    repairs: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -272,6 +273,7 @@ class ToolAgent:
             {"role": "user", "content": json.dumps(context, ensure_ascii=False, default=str)[:6000]},
         ]
         budget = self.max_calls
+        repairs = 0
         for round_no in range(1, self.max_rounds + 1):
             trace.rounds = round_no
             try:
@@ -280,6 +282,23 @@ class ToolAgent:
                 trace.error = f"{type(exc).__name__}: {exc}"
                 return trace
             data = parse_agent_reply(reply)
+            if not data and repairs < 2:
+                # مدل کوچک گاهی متن آزاد می‌نویسد؛ یک بار «فقط JSON» را یادآوری کن
+                repairs += 1
+                trace.repairs = repairs
+                messages.append({"role": "assistant", "content": (reply or "")[:2000]})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "پاسخ قبلی JSON معتبر نبود. فقط و فقط یک آبجکت JSON طبق قرارداد "
+                            'بفرست: {"analysis": "...", "tool_calls": [], "momentum": {...}, '
+                            '"proposal": null}. هیچ متن اضافه‌ای بیرون JSON نگذار.'
+                        ),
+                    }
+                )
+                LOG.info("پاسخ مدل JSON نبود؛ تلاش ترمیمی %s", repairs)
+                continue
             if not data:
                 trace.error = "پاسخ مدل JSON نبود"
                 trace.analysis = (reply or "").strip()[:400]

@@ -245,6 +245,8 @@ class LLMAdvisor:
             payload = {
                 "model": self.ollama_model,
                 "stream": False,
+                # قرارداد ایجنت JSON است؛ حالت json مدل را از متن آزاد دور می‌کند
+                "format": "json",
                 "options": {"temperature": 0.3, "num_predict": 700},
                 "messages": messages,
             }

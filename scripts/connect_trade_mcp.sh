@@ -64,7 +64,7 @@ def port_open(host="127.0.0.1", port=8787) -> bool:
         s.close()
 
 
-def ea_log_tail(n=3):
+def ea_log_tail(n=2):
     """آخرین خطوط سمت متاتریدر، تا لازم نباشد کاربر لاگ را کپی کند."""
     if not EXPERT_LOGS:
         return []
@@ -73,7 +73,34 @@ def ea_log_tail(n=3):
     except OSError:
         return []
     keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
-    return keep[-n:]
+    if keep:
+        return keep[-n:]
+    # اگر هیچ خط trade-mcp نبود، آخرین خط‌ها را بی‌فیلتر نشان بده (شاید اکسپرت اجرا نشده)
+    return [f"(no trade-mcp line) {ln}" for ln in lines[-1:]]
+
+
+def terminal_procs():
+    try:
+        out = subprocess.run(["pgrep", "-af", "terminal64.exe"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [ln for ln in out.splitlines() if "pgrep" not in ln]
+
+
+def mt5_context():
+    procs = terminal_procs()
+    lines = [f"MT5 process: {procs[0][:90]}" if procs else
+             "MT5 process: not running (terminal64.exe پیدا نشد)"]
+    if EXPERT_LOGS:
+        try:
+            age = int(time.time() - EXPERT_LOGS[-1].stat().st_mtime)
+        except OSError:
+            age = -1
+        lines.append(f"Experts log: {EXPERT_LOGS[-1].name} (last write {age}s ago)")
+    else:
+        lines.append(f"Experts log: not found under {PREFIX}/drive_c/.../MQL5/Logs")
+    return lines
 
 
 def port_owner():
@@ -115,6 +142,7 @@ else:
     print("  [watch] سرور MCP بالا آمد و تا Ctrl-C باز می‌ماند")
 
 connected_reported = False
+last_mt5 = None
 try:
     for attempt in range(1, 721):
         status = None
@@ -175,9 +203,13 @@ try:
         else:
             socket_note = f"8787={'open' if port_open() else 'refused'}"
             print(f"  [{attempt:02d}] ea=no listen={listen} {socket_note} · {err}")
-            tail = ea_log_tail(1)
-            if tail:
-                print(f"      MT5: {tail[0][:160]}")
+            if attempt == 1 or attempt % 12 == 0:
+                for line in mt5_context():
+                    print(f"      {line}")
+            global_mt5 = ea_log_tail(1)
+            if global_mt5 and global_mt5[0] != last_mt5:
+                last_mt5 = global_mt5[0]
+                print(f"      MT5: {last_mt5[:160]}")
         time.sleep(5)
 finally:
     if client is not None:

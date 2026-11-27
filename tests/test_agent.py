@@ -136,3 +136,57 @@ def test_patch_script_fixes_the_known_connector_error(tmp_path) -> None:
     # تابع کمکی و نقطهٔ درج بعد از include باید در اسکریپت باشد
     assert "string LongToString(const long value)" in body
     assert 'stripped.startswith("#include")' in body
+
+
+def test_free_text_reply_gets_one_json_repair_attempt() -> None:
+    """مدل ۷B گاهی متن می‌نویسد؛ ایجنت باید یک بار «فقط JSON» را یادآوری کند."""
+    from tradeagent.agent import ToolAgent
+
+    replies = [
+        "قیمت دارد بالا می‌رود و به نظرم خرید خوب است.",
+        json.dumps(
+            {
+                "analysis": "شتاب مثبت در ۹۰ ثانیه",
+                "tool_calls": [],
+                "momentum": {
+                    "direction": "up",
+                    "phase": "accelerating",
+                    "strength": 0.6,
+                    "horizon_s": 90,
+                    "confidence": 0.55,
+                },
+                "proposal": None,
+            }
+        ),
+    ]
+    seen = {"n": 0}
+    sent: list[list[dict[str, str]]] = []
+
+    def chat(messages):  # noqa: ANN001
+        sent.append(list(messages))
+        seen["n"] += 1
+        return replies[seen["n"] - 1]
+
+    agent = ToolAgent(chat=chat, mcp=None)
+    trace = agent.run({"cycle": 1})
+
+    assert trace.error == ""
+    assert trace.repairs == 1
+    assert trace.momentum["phase"] == "accelerating"
+    # پیام ترمیمی واقعاً به مدل رسیده است
+    assert any("JSON" in m["content"] for m in sent[1] if m["role"] == "user")
+
+
+def test_run_gold_never_fights_its_own_service(tmp_path) -> None:
+    """سرویس باید صبر کند تا نمونهٔ قبلی واقعاً بمیرد، بعد بالا بیاید."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    # الگوی پروسه لنگر دارد، وگرنه شل‌های دیگر هم گرفته می‌شدند
+    assert 'pgrep -f "^$ROOT/.venv/bin/tradeagent"' in body
+    # تا خروج واقعی نمونهٔ قبلی صبر می‌کند
+    assert "kill -0" in body and "همه بسته شدند" in body
+    # قفل زنده را پاک نمی‌کند
+    assert 'if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then' in body
+    # آمادگی با فایل وضعیت پل سنجیده می‌شود، نه فقط is-active
+    assert "var/state/mcp_status.json" in body
