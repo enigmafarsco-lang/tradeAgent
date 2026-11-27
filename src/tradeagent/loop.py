@@ -212,68 +212,26 @@ class Runner:
 
     @staticmethod
     def _read_log(path: Path) -> list[str]:
-        """متاتریدر لاگش را UTF-16LE می‌نویسد؛ utf-8 خواندنش خطوط را نامرئی می‌کند."""
+        from .diag import read_log
+
+        return read_log(path)
+
+    def _ea_log_dirs(self) -> list[Path]:
+        """از پوشهٔ هاروستر (که خودش پیدا شده) به MQL5/Logs برس."""
+        dirs: list[Path] = []
         try:
-            raw = path.read_bytes()
-        except OSError:
-            return []
-        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-            text = raw.decode("utf-16", errors="replace")
-        elif b"\x00" in raw[:400]:
-            text = raw.decode("utf-16-le", errors="replace")
-        else:
-            text = raw.decode("utf-8", errors="replace")
-        return text.splitlines()
+            harvester = Path(str(self.cfg.get("data.harvester_dir", "")))
+            if harvester.name == "harvester":
+                dirs.append(harvester.parent.parent / "Logs")
+        except (TypeError, ValueError):
+            pass
+        return dirs
 
     @staticmethod
-    def _ea_log() -> dict[str, Any]:
-        """متاتریدر خود می‌گوید چه خبر است؛ لاگش را بخوان تا کاربر کپی نکند.
+    def _ea_log(extra_dirs: list[Path] | None = None) -> dict[str, Any]:
+        from .diag import ea_log
 
-        دو فایل وجود دارد: ``MQL5/Logs`` (تب Experts، جای خطوط trade-mcp) و ``logs``
-        (Journal). «تازه‌ترین فایل» کافی نیست - ممکن است Journal باشد و هیچ خط اکسپرت
-        نداشته باشد، پس اول فایلی که واقعاً خط trade-mcp دارد.
-        """
-        import os
-
-        prefix = Path(os.environ.get("MT5_WINEPREFIX") or (Path.home() / "Wine")) / "drive_c"
-        patterns = (
-            "Program Files/MetaTrader 5/MQL5/Logs/*.log",
-            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
-            "Program Files/MetaTrader 5/logs/*.log",
-            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
-        )
-        files = [f for pat in patterns for f in prefix.glob(pat)]
-        if not files:
-            return {"found": False}
-        newest = max(files, key=lambda f: f.stat().st_mtime)
-        best: tuple[float, Path, list[str]] | None = None
-        for f in files:
-            lines = Runner._read_log(f)
-            ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
-            if not ea:
-                continue
-            m = f.stat().st_mtime
-            if best is None or m > best[0]:
-                best = (m, f, ea)
-        if best is None:
-            return {
-                "found": True,
-                "file": str(newest),
-                "age_s": int(time.time() - newest.stat().st_mtime),
-                "last": [],
-                "refused": False,
-                "connected": False,
-                "no_line": True,
-            }
-        m, f, ea = best
-        return {
-            "found": True,
-            "file": str(f),
-            "age_s": int(time.time() - m),
-            "last": ea[-2:],
-            "refused": any("err=4014" in ln for ln in ea[-6:]),
-            "connected": any("connected" in ln.lower() for ln in ea[-6:]),
-        }
+        return ea_log(extra_dirs or [])
 
     def publish_mcp_status(self) -> dict[str, Any]:
         """وضعیت پل متاتریدر را در یک فایل بنویس.
@@ -308,7 +266,7 @@ class Runner:
                         "process can host the bridge - stop the other one"
                     )
         status["mt5"] = self._mt5_netns()
-        status["ea_log"] = self._ea_log()
+        status["ea_log"] = self._ea_log(self._ea_log_dirs())
         try:
             write_json(self.state_dir / "mcp_status.json", status)
         except OSError:

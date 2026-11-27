@@ -74,35 +74,19 @@ def port_open(host="127.0.0.1", port=8787) -> bool:
         s.close()
 
 
-def read_log(path):
-    raw = path.read_bytes()
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16", errors="replace").splitlines()
-    if b"\x00" in raw[:400]:
-        return raw.decode("utf-16-le", errors="replace").splitlines()
-    return raw.decode("utf-8", errors="replace").splitlines()
-
-
-def ea_log_tail(n=2):
-    """آخرین خطوط سمت متاتریدر؛ اول فایلی که واقعاً خط trade-mcp دارد (نه Journal)."""
-    if not EXPERT_LOGS:
-        return []
-    best = None
-    for f in EXPERT_LOGS:
-        try:
-            lines = read_log(f)
-        except OSError:
-            continue
-        keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
-        if keep:
-            best = (f.stat().st_mtime, keep)
-    if best:
-        return best[1][-n:]
+def ea_log_tail(n=3):
+    """لاگ متاتریدر را با ماژول tradeagent.diag بخوان (UTF-16، Experts نه Journal)."""
     try:
-        lines = read_log(EXPERT_LOGS[-1])
-    except OSError:
+        from tradeagent.diag import ea_log
+    except ImportError:
         return []
-    return [f"(no trade-mcp line) {ln}" for ln in lines[-1:]]
+    info = ea_log()
+    if not info.get("found"):
+        return []
+    lines = info.get("last") or []
+    if info.get("no_line"):
+        return ["(no trade-mcp line in any MT5 log: the expert never ran on a chart)"]
+    return lines[-n:]
 
 
 def terminal_procs():

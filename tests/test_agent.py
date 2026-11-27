@@ -225,16 +225,19 @@ def test_run_gold_status_reports_mt5_itself() -> None:
 
     body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert "mt5_report()" in body
-    assert "terminal64.exe" in body and "NOT running" in body
-    assert "Experts log" in body
+    assert "from tradeagent.diag import report" in body
+    diag = (Path(__file__).resolve().parents[1] / "src" / "tradeagent" / "diag.py").read_text(encoding="utf-8")
+    assert "terminal64.exe" in diag and "NOT running" in diag
+    assert "Experts log" in diag
 
 
 def test_mt5_logs_are_looked_for_in_both_layouts() -> None:
     """نصب پرتابل در Program Files است، ولی نصب معمولی لاگ را در AppData می‌نویسد."""
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[1] / "scripts"
-    for name in ("run_gold.sh", "connect_trade_mcp.sh"):
-        body = (root / name).read_text(encoding="utf-8")
-        assert "AppData/Roaming/MetaQuotes/Terminal" in body, name
-        assert "Program Files/MetaTrader 5/MQL5/Logs/*.log" in body, name
+    root = Path(__file__).resolve().parents[1] / "src" / "tradeagent"
+    body = (root / "diag.py").read_text(encoding="utf-8")
+    assert "AppData/Roaming/MetaQuotes/Terminal" in body
+    assert "Program Files/MetaTrader 5/MQL5/Logs/*.log" in body
+    watch = (Path(__file__).resolve().parents[1] / "scripts" / "connect_trade_mcp.sh").read_text(encoding="utf-8")
+    assert "from tradeagent.diag import ea_log" in watch

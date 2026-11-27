@@ -1,0 +1,142 @@
+"""خواندن وضعیت متاتریدر از روی دیسک — بدون اینکه کاربر چیزی کپی کند.
+
+سه واقعیت که این ماژول را لازم کرد:
+
+* متاتریدر لاگ‌ها را **UTF-16LE** می‌نویسد؛ خواندن utf-8 هر خط را نامرئی می‌کند؛
+* دو لاگ وجود دارد: ``MQL5/Logs`` (تب Experts، جای Print اکسپرت) و ``logs`` (Journal)؛
+  Journal همیشه تازه‌تر است ولی خطوط اکسپرت را ندارد؛
+* دادهٔ ترمینال ممکن است در نصب پرتابل (کنار exe) یا در
+  ``users/<u>/AppData/Roaming/MetaQuotes/Terminal/<hash>`` باشد.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Iterable
+
+MAX_FILE_BYTES = 8_000_000
+MAX_FILES = 400
+
+
+def prefix() -> Path:
+    return Path(os.environ.get("MT5_WINEPREFIX") or (Path.home() / "Wine")) / "drive_c"
+
+
+def read_log(path: Path) -> list[str]:
+    """UTF-16 یا UTF-8؟ از BOM/بایت صفر تشخیص بده."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="replace")
+    elif b"\x00" in raw[:400]:
+        text = raw.decode("utf-16-le", errors="replace")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    return text.splitlines()
+
+
+def candidate_logs(extra_dirs: Iterable[str | Path] = ()) -> list[Path]:
+    """فایل‌های لاگ محتمل، تازه‌ترین اول؛ جست‌وجوی بازگشتی هم دارد ولی محدود."""
+    root = prefix()
+    found: set[Path] = set()
+    for pat in (
+        "Program Files/MetaTrader 5/MQL5/Logs/*.log",
+        "Program Files/MetaTrader 5/logs/*.log",
+        "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
+        "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
+    ):
+        found.update(root.glob(pat))
+    for extra in extra_dirs:
+        d = Path(extra)
+        if d.is_dir():
+            found.update(d.glob("*.log"))
+    if not found:  # نصب در مسیر غیرمنتظره: جست‌وجوی محدود
+        now = time.time()
+        scanned = 0
+        for f in sorted(root.rglob("*.log"), key=lambda f: -f.stat().st_mtime if f.exists() else 0):
+            if scanned >= MAX_FILES:
+                break
+            scanned += 1
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if st.st_size > MAX_FILE_BYTES or now - st.st_mtime > 3 * 86400:
+                continue
+            if "MQL5" in str(f) or "MetaQuotes" in str(f):
+                found.add(f)
+    return sorted(found, key=lambda f: f.stat().st_mtime, reverse=True)
+
+
+def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
+    files = candidate_logs(extra_dirs)
+    if not files:
+        return {"found": False}
+    best: tuple[float, Path, list[str]] | None = None
+    for f in files:
+        lines = read_log(f)
+        ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+        if not ea:
+            continue
+        m = f.stat().st_mtime
+        if best is None or m > best[0]:
+            best = (m, f, ea)
+    if best is None:
+        newest = files[0]
+        return {
+            "found": True,
+            "file": str(newest),
+            "age_s": int(time.time() - newest.stat().st_mtime),
+            "last": [],
+            "refused": False,
+            "connected": False,
+            "no_line": True,
+        }
+    m, f, ea = best
+    return {
+        "found": True,
+        "file": str(f),
+        "age_s": int(time.time() - m),
+        "last": ea[-3:],
+        "refused": any("err=4014" in ln for ln in ea[-8:]),
+        "connected": any("connected" in ln.lower() for ln in ea[-8:]),
+    }
+
+
+def mt5_pids() -> list[str]:
+    pids: list[str] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmd = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        if "terminal64.exe" in cmd:
+            pids.append(entry.name)
+    return pids
+
+
+def report() -> None:
+    """بلوک خوانا برای `run_gold.sh --status`."""
+    pids = mt5_pids()
+    print(f"  terminal64.exe: {('running (pid ' + ', '.join(pids[:2]) + ')') if pids else 'NOT running - متاتریدر باز نیست'}")
+    info = ea_log()
+    if not info.get("found"):
+        print(f"  Experts log: هیچ *.log زیر {prefix()} پیدا نشد")
+        return
+    f = Path(str(info["file"]))
+    try:
+        rel = f.relative_to(prefix())
+    except ValueError:
+        rel = f
+    print(f"  Experts log: {rel} (آخرین نوشتن {info.get('age_s')}s پیش)")
+    for line in (info.get("last") or [])[-3:]:
+        print(f"    {line[:150]}")
+    if info.get("no_line"):
+        print("    (هیچ خط trade-mcp در هیچ فایل لاگی نبود: اکسپرت روی چارت اجرا نشده)")

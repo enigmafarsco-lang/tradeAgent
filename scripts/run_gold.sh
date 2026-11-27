@@ -10,6 +10,9 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+PY="$ROOT/.venv/bin/python"
+[[ -x "$PY" ]] || PY="python3"
+export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 INTERVAL="${INTERVAL:-300}"
 MODE="enable"
 case "${1:-}" in
@@ -37,67 +40,9 @@ status_file() {
 }
 
 mt5_report() {
-  local prefix="${MT5_WINEPREFIX:-$HOME/Wine}"
   step "۵) متاتریدر"
-  PREFIX="$prefix" python3 - <<'PY' 2>/dev/null || dim "خواندن وضعیت متاتریدر نشد"
-import os, pathlib, subprocess, time
-
-prefix = pathlib.Path(os.environ["PREFIX"])
-c = prefix / "drive_c"
-# سه جا ممکن است لاگ باشد: نصب پرتابل، Journal، و پروفایل AppData
-patterns = [
-    "Program Files/MetaTrader 5/MQL5/Logs/*.log",
-    "Program Files/MetaTrader 5/logs/*.log",
-    "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
-    "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
-]
-found = []
-for pat in patterns:
-    found.extend(c.glob(pat))
-default_dir = c / "Program Files" / "MetaTrader 5" / "MQL5" / "Files" / "harvester"
-
-try:
-    out = subprocess.run(["pgrep", "-af", "terminal64.exe"], capture_output=True, text=True, timeout=5).stdout
-    procs = [l for l in out.splitlines() if "pgrep" not in l]
-except (OSError, subprocess.SubprocessError):
-    procs = []
-print(f"  terminal64.exe: {('running (' + procs[0][:70] + ')') if procs else 'NOT running - متاتریدر باز نیست'}")
-
-# فایل Journal هم هست؛ اول آن را که واقعاً خط trade-mcp دارد بردار
-# متاتریدر لاگ را UTF-16LE می‌نویسد؛ utf-8 خواندن، خطوط را نامرئی می‌کند
-def read_log(path):
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return []
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        text = raw.decode("utf-16", errors="replace")
-    elif b"\x00" in raw[:400]:
-        text = raw.decode("utf-16-le", errors="replace")
-    else:
-        text = raw.decode("utf-8", errors="replace")
-    return text.splitlines()
-
-
-with_ea = []
-for f in found:
-    lines = read_log(f)
-    if any("trade-mcp" in l.lower() or "TradeMCPConnector" in l for l in lines):
-        with_ea.append(f)
-
-if not found:
-    print(f"  Experts log: هیچ *.log زیر {c} پیدا نشد")
-else:
-    f = (max(with_ea, key=lambda x: x.stat().st_mtime) if with_ea else found[-1])
-    age = int(time.time() - f.stat().st_mtime)
-    print(f"  Experts log: {f.relative_to(c)} (آخرین نوشتن {age}s پیش)")
-    lines = read_log(f)
-    keep = [l for l in lines if "trade-mcp" in l.lower() or "TradeMCPConnector" in l]
-    for l in (keep[-3:] if keep else lines[-2:]):
-        print(f"    {l[:150]}")
-    if not keep:
-        print("    (هیچ خط trade-mcp نیست: اکسپرت روی هیچ چارتی اجرا نشده)")
-PY
+  "$PY" -c 'from tradeagent.diag import report; report()' 2>/dev/null \
+    || dim "خواندن وضعیت متاتریدر نشد (نصب editable؟)"
 }
 
 show_bridge() {

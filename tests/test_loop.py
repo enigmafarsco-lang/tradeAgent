@@ -207,3 +207,17 @@ def test_ea_log_is_utf16_as_metatrader_writes_it(tmp_path, monkeypatch) -> None:
     info = Runner._ea_log()
     assert info["refused"] is True
     assert "err=4014" in info["last"][-1]
+
+
+def test_diag_finds_logs_deep_inside_the_prefix(tmp_path, monkeypatch) -> None:
+    """اگر دادهٔ ترمینال در AppData باشد، جست‌وجوی بازگشتی باید پیدایش کند."""
+    from tradeagent.diag import ea_log
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    deep = tmp_path / "drive_c" / "users" / "joshua" / "AppData" / "Roaming" / "MetaQuotes" / "Terminal" / "X1" / "MQL5" / "Logs"
+    deep.mkdir(parents=True)
+    (deep / "20261127.log").write_bytes(
+        "2026.11.27 14:54:15\tTradeMCPConnector\t[trade-mcp] connected\r\n".encode("utf-16-le")
+    )
+    info = ea_log()
+    assert info["found"] is True and info["connected"] is True
