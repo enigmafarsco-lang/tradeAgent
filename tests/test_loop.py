@@ -528,7 +528,7 @@ def test_verify_waits_for_the_expert_before_running(cfg: Config) -> None:
 
     root = Path(__file__).resolve().parents[1]
     body = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
-    assert "--wait-ea 90" in body
+    assert 'WAIT_EA=90' in body
     assert "اتصال اکسپرت:" in body
     cli = (root / "src/tradeagent/cli.py").read_text(encoding="utf-8")
     assert '"--wait-ea"' in cli
@@ -570,8 +570,8 @@ def test_verify_closes_the_service_leftover_bridge_first() -> None:
 
     body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert "kill_stale_bridges" in body
-    assert "--wait-ea 90" in body
-    assert body.index("kill_stale_bridges") < body.index("--wait-ea 90")
+    assert 'WAIT_EA=90' in body
+    assert body.index("kill_stale_bridges") < body.index("WAIT_EA=90")
 
 
 def test_bridge_processes_are_found_by_cmdline(tmp_path) -> None:
@@ -582,7 +582,7 @@ def test_bridge_processes_are_found_by_cmdline(tmp_path) -> None:
         assert "trade-mcp" in cmd
 
 
-def test_with_mcp_off_the_agent_uses_only_local_tools(cfg: Config) -> None:
+def test_with_mcp_off_the_agent_uses_only_local_tools(cfg: Config, tmp_path) -> None:
     """پل متاتریدر unreliable است؛ چرخه باید با تیک‌های خودمان کامل کار کند."""
     import tomllib
     from pathlib import Path
@@ -591,6 +591,9 @@ def test_with_mcp_off_the_agent_uses_only_local_tools(cfg: Config) -> None:
     conf = tomllib.loads((root / "configs" / "gold.toml").read_text(encoding="utf-8"))
     assert conf["agent"]["use_mcp"] is False
 
+    cfg.set("agent.use_mcp", False)
+    cfg.set("data.state_dir", str(tmp_path / "var2"))
+    cfg.set("paper.sqlite", str(tmp_path / "var2" / "paper.sqlite3"))
     runner = Runner(cfg)
     assert runner.agent_mcp is False
     assert runner.agent is not None
