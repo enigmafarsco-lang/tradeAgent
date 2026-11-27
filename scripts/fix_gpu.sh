@@ -5,6 +5,7 @@
 #   ./scripts/fix_gpu.sh              # NVIDIA را آزاد کن، وگرنه Vulkan؛ بعد اثبات
 #   ./scripts/fix_gpu.sh --debug      # فقط بگو ollama چه دستگاه‌هایی می‌بیند
 #   ./scripts/fix_gpu.sh --vulkan     # فقط مسیر Vulkan (Intel/AMD)
+#   ./scripts/fix_gpu.sh --speed      # فقط سرعت فعلی (tokens/s)
 # ---------------------------------------------------------------------------
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,6 +15,7 @@ for a in "$@"; do
   case "$a" in
     --debug) MODE="debug" ;;
     --vulkan) MODE="vulkan" ;;
+    --speed) MODE="speed" ;;
     -h|--help) sed -n '3,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$a"; exit 2 ;;
   esac
@@ -113,6 +115,57 @@ ollama_discovery() {
 }
 
 # ---------------------------------------------------------------------------
+# CUDA: تنظیم متناسب با حافظهٔ کارت + سنجش سرعت واقعی
+# ---------------------------------------------------------------------------
+tune_cuda() {
+  step "۳) تنظیم CUDA و سنجش سرعت"
+  local mib unit="$HOME/.config/systemd/user/ollama.service"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    mib="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' ')"
+    command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/  card: /'
+  fi
+  mib="${mib:-0}"
+  if [[ "$mib" =~ ^[0-9]+$ ]] && (( mib > 0 && mib < 8192 )); then
+    if [[ -f "$unit" ]] && ! grep -q '^Environment=OLLAMA_CONTEXT_LENGTH=' "$unit"; then
+      python3 - "$unit" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+out, done = [], False
+for ln in p.read_text().splitlines():
+    out.append(ln)
+    if ln.startswith("ExecStart=") and not done:
+        out.append("Environment=OLLAMA_CONTEXT_LENGTH=8192")
+        done = True
+p.write_text("\n".join(out) + "\n")
+PY
+      ok "کارت ${mib} MiB است؛ context روی 8192 گذاشته شد تا در VRAM جا شود"
+      restart_ollama || true
+    else
+      dim "context setting: $(grep -s '^Environment=OLLAMA_CONTEXT_LENGTH=' "$unit" | tail -1)"
+    fi
+  fi
+  load_model
+  proof || { warn "بعد از ری‌استارت روی GPU نرفت"; return 1; }
+  speed_probe
+}
+
+speed_probe() {
+  local m; m="$(grep -s '^TRADEAGENT_OLLAMA_MODEL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2-)"
+  m="${m:-qwen2.5:7b-instruct}"
+  printf '  speed: '
+  curl -s --max-time 240 -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "stream": False, "keep_alive": "15m", "options": {"num_predict": 96}, "prompt": "List three short facts about gold."}))' "$m")" \
+    "$OURL/api/generate" 2>/dev/null | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print("no answer"); raise SystemExit
+ec, ed = int(d.get("eval_count") or 0), int(d.get("eval_duration") or 0)
+if ec and ed: print(f"{ec/(ed/1e9):.1f} tokens/s ({ec} tokens)")
+else: print("no timing in the answer")
+'
+}
+
+# ---------------------------------------------------------------------------
 # فاز ۱: NVIDIA
 # ---------------------------------------------------------------------------
 phase_nvidia() {
@@ -168,6 +221,10 @@ phase_vulkan() {
 }
 
 # ---------------------------------------------------------------------------
+if [[ "$MODE" == "speed" ]]; then
+  speed_probe
+  exit $?
+fi
 if [[ "$MODE" == "debug" ]]; then
   ollama_discovery
   exit $?
@@ -184,6 +241,7 @@ if (( HAVE_NVIDIA )); then
   step "۳) اثبات با NVIDIA"
   restart_ollama && load_model
   if proof; then
+    tune_cuda
     ok "تمام. روی GPU است ($(backend_name))."
     exit 0
   fi

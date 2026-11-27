@@ -90,14 +90,14 @@
 (جداکردن فوری + کامنت‌کردن `vfio` در `modprobe.d` + حذف `vfio-pci.ids` از grub،
 با نسخهٔ پشتیبان) و سپس ریبوت.
 
-## وضعیت فعلی GPU
+## وضعیت فعلی GPU — حل شد
 
-* سرویس کاربری ollama فعال است، `OLLAMA_VULKAN=1` و `OLLAMA_IGPU_ENABLE=1` هم در
-  متغیرهای خود پروسه دیده می‌شوند، ولی `/api/ps` می‌گوید `size_vram = 0` → CPU.
-* NVIDIA: کرنل `7.0.0-44`, ماژول امضاشده روی دیسک (595.99.02)، ولی بار نمی‌شود؛
-  آخرین حکم `vfio-pci` بود.
-* راه واحد: `./scripts/fix_gpu.sh` که به ترتیب NVIDIA → Vulkan را امتحان می‌کند و اگر
-  نشد، خط تشخیص خود Ollama (`inference compute … library=…`) را چاپ می‌کند.
+* NVIDIA: کرنل `7.0.0-44`، ماژول امضاشده بار شد (`NVRM 595.99.02`)، کارت از
+  `vfio-pci` آزاد شد.
+* Ollama: `size_vram ≈ 6.6 GB`، بک‌اند **NVIDIA (CUDA)** — یعنی مدل روی RTX 4050 است.
+* `ExecStartPre` منتظر `/dev/dri` می‌ماند تا بعد از ریبوت سرویس قبل از دستگاه
+  گرافیکی بالا نیاید؛ `OLLAMA_CONTEXT_LENGTH=8192` هم برای ۶GB VRAM ست می‌شود.
+* سنجش: `./scripts/fix_gpu.sh --speed` → tokens/s واقعی.
 
 ## نگهبان ضبط (watchdog)
 
