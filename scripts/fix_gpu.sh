@@ -118,6 +118,55 @@ ollama_discovery() {
 # ---------------------------------------------------------------------------
 # CUDA: تنظیم متناسب با حافظهٔ کارت + سنجش سرعت واقعی
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# متغیرهای موقت Vulkan وقتی NVIDIA کار می‌کند فقط ضرر دارند: ollama دو دستگاه
+# می‌بیند و مدل را بین آن‌ها پخش می‌کند (نتیجه: ۶ توکن/ثانیه با کارت بیکار).
+# ---------------------------------------------------------------------------
+strip_vulkan_stopgap() {
+  local unit="$HOME/.config/systemd/user/ollama.service" stamp changed=0
+  [[ -f "$unit" ]] || return 0
+  if grep -qE '^Environment=OLLAMA_(VULKAN|IGPU_ENABLE)=' "$unit"; then
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    cp "$unit" "$unit.tradeagent-backup-$stamp"
+    python3 - "$unit" <<'PY'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+out = []
+for ln in p.read_text().splitlines():
+    if re.match(r'^Environment=OLLAMA_(VULKAN|IGPU_ENABLE)=', ln):
+        out.append("# " + ln + "   # disabled by tradeAgent (NVIDIA works now; Vulkan was a stopgap)")
+    else:
+        out.append(ln)
+p.write_text("\n".join(out) + "\n")
+PY
+    ok "متغیرهای موقت Vulkan برداشته شدند (پشتیبان: $(basename "$unit").tradeagent-backup-$stamp)"
+    changed=1
+  else
+    dim "no Vulkan stopgap variables in the unit"
+  fi
+  return 0
+}
+
+# نمونه‌برداری واقعی در طول تولید: بیشترین util و VRAM
+gpu_peak_during_generation() {
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  local mm; mm="$(model_name)"
+  ( curl -s --max-time 180 -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "stream": False, "keep_alive": "15m", "options": {"num_predict": 200}, "prompt": "Write a paragraph about the history of money, then another about gold."}))' "$mm")" \
+      "$OURL"* >/dev/null 2>&1 ) &
+  local gpid=$! best_util=0 best_mem=0 i util mem
+  for i in $(seq 1 25); do
+    IFS=, read -r util mem <<<"$(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d ' ')"
+    util="${util%\%%}"; util="${util// /}"; mem="${mem// /}"
+    [[ "$util" =~ ^[0-9]+$ ]] && (( util > best_util )) && best_util="$util"
+    [[ "$mem" =~ ^[0-9]+$ ]] && (( mem > best_mem )) && best_mem="$mem"
+    kill -0 "$gpid" 2>/dev/null || break
+    sleep 1
+  done
+  wait "$gpid" 2>/dev/null
+  echo "  peak during generation: ${best_util}% util, ${best_mem} MiB VRAM"
+}
+
 tune_cuda() {
   step "۳) تنظیم CUDA و سنجش سرعت"
   local mib unit="$HOME/.config/systemd/user/ollama.service"
@@ -141,28 +190,35 @@ for ln in p.read_text().splitlines():
 p.write_text("\n".join(out) + "\n")
 PY
   }
+  local before after
+  before="$(speed_probe)"
+  dim "before tuning: ${before}"
+
   # ۶GB VRAM با مدل ۷B: context بزرگ + KV در fp16 سرریز می‌کند و به ۶ توکن/ثانیه می‌رسد
   if [[ "$mib" =~ ^[0-9]+$ ]] && (( mib > 0 )); then
     into_unit "OLLAMA_NUM_PARALLEL=1"
     into_unit "OLLAMA_FLASH_ATTENTION=1"
     into_unit "OLLAMA_KV_CACHE_TYPE=q8_0"
     if (( mib < 8192 )); then into_unit "OLLAMA_CONTEXT_LENGTH=4096"; fi
+    strip_vulkan_stopgap
     restart_ollama || true
     ok "KV cache به q8_0 و context به ۴۰۹۶ رفت (برای $(awk -v m="$mib" 'BEGIN{printf "%d", m}') MiB)"
   fi
   load_model
   proof || { warn "بعد از ری‌استارت روی GPU نرفت"; return 1; }
-  local tps; tps="$(speed_probe)"
-  printf '  speed: %s\n' "$tps"
-  # اگر هنوز کند است، بگو کارت در همان لحظه چه می‌کند
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    local mm; mm="$(model_name)"
-    ( sleep 0.2; curl -s --max-time 90 -H 'Content-Type: application/json' \
-        -d "$(python3 -c 'import json,sys; print(json.dumps({"model": sys.argv[1], "stream": False, "options": {"num_predict": 256}, "prompt": "Write a long paragraph about the history of money."}))' "$mm" 2>/dev/null)" \
-        "$OURL/api/generate" >/dev/null 2>&1 ) &
-    sleep 3
-    nvidia-smi --query-gpu=utilization.gpu,power.draw,clocks.sm,memory.used --format=csv,noheader 2>/dev/null | sed 's/^/  during generation: /'
-    wait 2>/dev/null
+  after="$(speed_probe)"
+  printf '  speed: %s' "$after"
+  [[ -n "$before" && "$before" != "$after" ]] && printf '  (قبلاً: %s)' "$before"
+  echo
+  gpu_peak_during_generation
+  local n; n="${after%% *}"
+  if [[ "$n" =~ ^[0-9.]+$ ]] && awk -v a="$n" 'BEGIN{exit !(a < 20)}'; then
+    warn "سرعت هنوز پایین است (${n} tokens/s) - ببین ollama کدام library را انتخاب کرده:"
+    ollama_discovery | sed -n '1,12p'
+    echo "  اگر library=cpu یا library=vulkan بود:"
+    echo "    ./scripts/setup_llm.sh --off && ./scripts/fix_gpu.sh"
+    echo "  اگر library=cuda و util=0 بود: کارت throttle شده؛"
+    echo "    nvidia-smi -q -d PERFORMANCE | head -20"
   fi
 }
 
