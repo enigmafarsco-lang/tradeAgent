@@ -81,6 +81,14 @@
 اسکریپت این حالت «ماژول امضاشده برای کرنل دیگر» را جدا تشخیص می‌دهد.
 تا آن زمان Intel Arc با Vulkan کار می‌کند (`100% GPU`).
 
+## مرحلهٔ فعلی RTX 4050
+
+بعد از ریبوت روی کرنل `7.0.0-44` ماژول امضاشده بارگذاری مجاز شد، ولی
+`modprobe nvidia` می‌گوید **`No such device`** و `dmesg` هم `NVRM: No NVIDIA GPU found`
+دارد. یعنی امضا حل شد و مسئله «چه کسی کارت را در اختیار دارد» است. حکم قطعی با
+`./scripts/fix_nvidia.sh --deep` (خروجی در `var/logs/nvidia-diag.txt`)، بعد
+`--nouveau-off` یا `--pci-reset` یا درایور غیر-آزاد.
+
 ## نگهبان ضبط (watchdog)
 
 `scripts/watch_harvester.sh` ضربان `status.json` و تازه‌ترین فایل تیک را می‌سنجد:

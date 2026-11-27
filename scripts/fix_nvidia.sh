@@ -5,6 +5,9 @@
 #   ./scripts/fix_nvidia.sh              # تشخیص + تلاش برای نصب ماژول امضاشده
 #   ./scripts/fix_nvidia.sh --check      # فقط تشخیص، هیچ تغییری نده
 #   ./scripts/fix_nvidia.sh --mok        # آماده‌سازی ثبت کلید MOK (نیاز به ریبوت)
+#   ./scripts/fix_nvidia.sh --deep       # وقتی ماژول "No such device" می‌دهد: دلیل را پیدا کن
+#   ./scripts/fix_nvidia.sh --nouveau-off # اگر nouveau کارت را گرفته باشد
+#   ./scripts/fix_nvidia.sh --pci-reset   # اگر درایور کارت را در سطح PCI نمی‌بیند
 #
 # علت رایج: Secure Boot روشن + ماژول DKMS امضانشده → "Key was rejected by service".
 # راه بدون BIOS: بسته‌های امضاشدهٔ اوبونتو (linux-modules-nvidia-*-generic).
@@ -14,11 +17,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 CHECK_ONLY=0
 DO_MOK=0
+DEEP=0
+NOUVEAU_OFF=0
+PCI_RESET=0
 
 for a in "$@"; do
   case "$a" in
     --check) CHECK_ONLY=1 ;;
     --mok) DO_MOK=1 ;;
+    --deep) DEEP=1 ;;
+    --nouveau-off) NOUVEAU_OFF=1 ;;
+    --pci-reset) PCI_RESET=1 ;;
     -h|--help) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$a"; exit 2 ;;
   esac
@@ -50,6 +59,141 @@ PY
   return 0
 }
 
+free_nouveau() {
+  step "بلک‌لیست کردن nouveau و آزادکردن کارت"
+  sudo -v 2>/dev/null || { bad "sudo لازم است"; return 1; }
+  printf '%s\n' 'blacklist nouveau' 'options nouveau modeset=0' \
+    | sudo tee /etc/modprobe.d/blacklist-nouveau.conf >/dev/null || return 1
+  ok "نوشته شد: /etc/modprobe.d/blacklist-nouveau.conf"
+  sudo modprobe -r nouveau 2>/dev/null && ok "nouveau از حافظه برداشته شد" \
+    || warn "nouveau در حال استفاده است؛ بعد از ریبوت آزاد می‌شود"
+  sudo update-initramfs -u >/dev/null 2>&1 && ok "initramfs به‌روز شد"
+  sudo modprobe nvidia 2>&1 | tail -2
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    ok "ماژول nvidia حالا بار شد: $(head -n1 /proc/driver/nvidia/version)"
+    nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | sed 's/^/    /'
+  else
+    warn "هنوز بار نشد؛ بعد از ریبوت دوباره: ./scripts/fix_nvidia.sh --check"
+    echo "      sudo reboot"
+  fi
+  return 0
+}
+
+pci_reset_gpu() {
+  local bdf
+  bdf="$(lspci -nn 2>/dev/null | awk '/NVIDIA/ && /VGA|3D/{print $1; exit}')"
+  [[ -n "$bdf" ]] || { bad "کارت NVIDIA در lspci نیست"; return 1; }
+  [[ "$bdf" != *:*:* ]] && bdf="0000:$bdf"
+  step "ریست PCI کارت $bdf"
+  sudo -v 2>/dev/null || { bad "sudo لازم است"; return 1; }
+  sudo modprobe -r nvidia 2>/dev/null || true
+  sudo sh -c "echo 1 > /sys/bus/pci/devices/$bdf/remove" 2>&1 | tail -2
+  sudo sh -c "echo 1 > /sys/bus/pci/rescan" 2>&1 | tail -2
+  sleep 2
+  sudo modprobe nvidia 2>&1 | tail -2
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    ok "بعد از ریست، ماژول بار شد"
+    nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | sed 's/^/    /'
+  else
+    warn "ریست کافی نبود؛ احتمالاً درایور غیر-آزاد لازم است:"
+    echo "      sudo apt install nvidia-driver-595 && sudo reboot"
+  fi
+  return 0
+}
+
+deep_diag() {
+  local out="$ROOT/var/logs/nvidia-diag.txt" verdict="" bdf drv
+  mkdir -p "$ROOT/var/logs"
+  step "تشخیص عمیق (همه‌چیز در $out)"
+  if ! sudo -v 2>/dev/null; then
+    bad "برای خواندن dmesg و بارگذاری ماژول، sudo لازم است"
+    return 1
+  fi
+  bdf="$(lspci -nn 2>/dev/null | awk '/NVIDIA/ && /VGA|3D/{print $1; exit}')"
+  # sysfs همیشه دامنهٔ چهاررقمی می‌خواهد: 56:00.0 → 0000:56:00.0
+  [[ -n "$bdf" && "$bdf" != *:*:* ]] && bdf="0000:$bdf"
+  {
+    echo "date      : $(date -Is)"
+    echo "kernel    : $(uname -r)"
+    echo "cmdline   : $(cat /proc/cmdline)"
+    echo "virt      : $(systemd-detect-virt 2>/dev/null || echo none)"
+    echo "secureboot: $(mokutil --sb-state 2>/dev/null | head -n1)"
+    echo
+    echo "=== lspci (nvidia) ==="
+    lspci -nnk 2>/dev/null | grep -A4 -i 'nvidia' || echo "no nvidia device in lspci"
+    echo
+    echo "=== modules ==="
+    lsmod | grep -Ei 'nouveau|nvidia|vfio|i915' || echo "none loaded"
+    echo
+    echo "=== modprobe nvidia ==="
+    sudo modprobe nvidia 2>&1; echo "rc=$?"
+    echo
+    echo "=== dmesg (nvidia) ==="
+    sudo dmesg 2>/dev/null | grep -iE 'nvidia|nvrm|nouveau' | tail -40 || echo "empty"
+    echo
+    echo "=== devices ==="
+    ls -l /dev/nvidia* 2>&1 | head -5
+    echo
+    echo "=== packages ==="
+    dpkg -l 2>/dev/null | awk '/nvidia-(driver|dkms|kernel|firmware|utils)/{print $2, $3}'
+  } > "$out" 2>&1
+
+  drv="$(awk -F': ' '/Kernel driver in use/{print $2; exit}' "$out")"
+  echo "  kernel driver in use on the GPU: ${drv:-<none>}"
+  echo "  log: $out"
+  echo
+  step "حکم"
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    ok "ماژول بار شد: $(head -n1 /proc/driver/nvidia/version)"
+    return 0
+  fi
+  local txt; txt="$(grep -iE 'nvrm|nvidia|nouveau' "$out" | tr 'A-Z' 'a-z')"
+  if [[ "$drv" == "nouveau" ]]; then
+    verdict="nouveau holds the GPU (that is why NVRM says 'No NVIDIA GPU found')"
+  elif [[ "$drv" == vfio* ]]; then
+    verdict="vfio-pci holds the GPU"
+  else
+    case "$txt" in
+      *"probe routine was not called"*) verdict="another driver owns the device" ;;
+      *"no nvidia gpu found"*|*"no devices found"*) verdict="the driver loaded but sees no GPU at the PCI level" ;;
+      *"unknown symbol"*|*"invalid module format"*) verdict="kernel/module mismatch - the module is not for this kernel" ;;
+      *"key was rejected"*) verdict="signature refused (secure boot)" ;;
+    esac
+  fi
+  [[ -z "$verdict" && ( -z "$drv" || "$drv" == "nvidia" ) ]] && verdict="no driver is bound to the GPU"
+  warn "نتیجه: ${verdict:-نامشخص - فایل $out را ببین}"
+  echo
+  case "$verdict" in
+    *nouveau*)
+      echo "  رفع: nouveau باید بلک‌لیست شود تا nvidia بتواند کارت را بگیرد:"
+      echo "    sudo modprobe -r nouveau"
+      echo "    echo 'blacklist nouveau' | sudo tee /etc/modprobe.d/blacklist-nouveau.conf"
+      echo "    sudo update-initramfs -u && sudo reboot" ;;
+    *vfio*)
+      echo "  رفع: شناسهٔ کارت را از vfio بردار و ریبوت کن"
+      echo "    grep -r vfio /etc/modprobe.d/ /etc/default/grub" ;;
+    *"no GPU at the PCI level"*)
+      echo "  یعنی درایور نصب است ولی کارت در دسترس نیست. دو کار:"
+      echo "    1) کارت را ریست کن:"
+      echo "       sudo sh -c 'echo 1 > /sys/bus/pci/devices/${bdf:-0000:56:00.0}/remove'"
+      echo "       sudo sh -c 'echo 1 > /sys/bus/pci/rescan'"
+      echo "       sudo modprobe nvidia && nvidia-smi"
+      echo "    2) اگر جواب نداد، درایور غیر-آزاد (بدون -open) را امتحان کن:"
+      echo "       sudo apt install nvidia-driver-595   # بدون open"
+      echo "       sudo reboot" ;;
+    *mismatch*)
+      echo "  رفع: بستهٔ ماژول همان کرنل را نصب کن:"
+      echo "    sudo apt install linux-modules-nvidia-595-open-$(uname -r)" ;;
+    *)
+      echo "  پیشنهاد: درایور غیر-آزاد را امتحان کن (روی بعضی لپ‌تاپ‌ها open با آن مشکل دارد):"
+      echo "    sudo apt install nvidia-driver-595 && sudo reboot" ;;
+  esac
+  echo
+  echo "  برای دیدن روند بوت:"
+  echo "    sudo dmesg | grep -iE 'nvidia|nvrm' | head -30"
+  return 2
+}
+
 run_sudo() {  # اجرای دستور با sudo، خروجی هم گرفته می‌شود هم دیده می‌شود
   sudo "$@" 2>&1
 }
@@ -75,6 +219,14 @@ PKGS="$(dpkg -l 2>/dev/null | awk '/^ii +nvidia-driver-[0-9]/{print $2}' | tr '\
 echo "  drivers     : ${PKGS:-none}"
 DKMS_N="$(dkms status 2>/dev/null | grep -c nvidia || true)"
 echo "  dkms entries: ${DKMS_N}"
+
+if (( NOUVEAU_OFF )); then free_nouveau; exit $?; fi
+if (( PCI_RESET )); then pci_reset_gpu; exit $?; fi
+
+if (( DEEP )); then
+  deep_diag
+  exit $?
+fi
 
 if (( CHECK_ONLY )); then
   step "2/5 پیام واقعی هسته"
