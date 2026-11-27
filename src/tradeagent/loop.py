@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import signal
 import time
+import os
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,55 @@ from .util import LOG, LockFile, ensure_dir, utc_day, utc_iso, utc_stamp, write_
 
 DEFAULT_SYMBOLS = ["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
 
+
+
+HAREV_REL = Path("drive_c/Program Files/MetaTrader 5/MQL5/Files/harvester")
+_DISCOVERY_LOGGED: set[str] = set()
+
+
+def resolve_harvester_dir(configured: Path) -> Path:
+    """پوشهٔ harvester را پیدا کن؛ اگر مسیر پیکربندی وجود نداشت، خودت بگرد.
+
+    خطای رایج میدانی: سرویس با کانفیگی بالا می‌آید که ``data.harvester_dir`` در آن
+    هنوز مسیر پیش‌فرض است، در حالی که MT5 در Wine جای دیگری می‌نویسد. نتیجه‌اش
+    «۰ کندل در هر چرخه» و پوزیشن‌های بی‌خروج است. اینجا مسیر واقعی کشف می‌شود.
+    """
+    configured = Path(configured).expanduser()
+    if (configured / "ticks").is_dir():
+        return configured
+    prefixes = []
+    for env_name in ("MT5_WINEPREFIX", "WINEPREFIX"):
+        val = os.environ.get(env_name)
+        if val:
+            prefixes.append(Path(val).expanduser())
+    prefixes += [
+        Path.home() / "Wine",
+        Path.home() / ".wine",
+        Path.home() / ".local/share/wineprefixes/mt5",
+    ]
+    candidates = [prefix / HAREV_REL for prefix in prefixes]
+    candidates.append(Path.home() / "mt5/MQL5/Files/harvester")
+    def _announce(found: Path) -> Path:
+        key = f"{configured}->{found}"
+        if key not in _DISCOVERY_LOGGED:
+            _DISCOVERY_LOGGED.add(key)
+            LOG.warning("data.harvester_dir=%s وجود ندارد؛ مسیر واقعی پیدا شد: %s", configured, found)
+        return found
+
+    for cand in candidates:
+        if (cand / "ticks").is_dir():
+            return _announce(cand)
+    for base in (Path.home() / "Wine", Path.home() / ".wine"):
+        if not base.is_dir():
+            continue
+        for match in base.glob("drive_c/**/MQL5/Files/harvester"):
+            if (match / "ticks").is_dir():
+                return _announce(match)
+    LOG.error(
+        "پوشهٔ harvester پیدا نشد (تنظیم‌شده: %s)؛ اکسپرت را اجرا کن یا data.harvester_dir را ست کن",
+        configured,
+    )
+    return configured
 
 class Runner:
     def __init__(self, cfg: Config, cfg_path: Path | None = None) -> None:
@@ -53,7 +103,7 @@ class Runner:
         if kind == "synthetic":
             return SyntheticSource(symbols or DEFAULT_SYMBOLS, vol_bps_per_hour=float(self.cfg.get("data.synthetic_vol_bps", 45.0)))
         return HarvesterSource(
-            root=self.cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"),
+            root=resolve_harvester_dir(self.cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester")),
             symbols=symbols or None,
             state_path=self.state_dir / "ingest_state.json",
             stale_after_s=float(self.cfg.get("data.stale_after_s", 180)),
@@ -149,7 +199,18 @@ class Runner:
         result.extra["recent_trades"] = self.store.recent_trades(8)
 
         if not ingest.bars or all(not v for v in ingest.bars.values()):
-            result.warnings.append("هیچ کندل تازه‌ای از منبع داده نیامد؛ اکسپرت متاتریدر یا مسیر را چک کن.")
+            where = ""
+            if isinstance(source, HarvesterSource):
+                where = f" (مسیر خوانده‌شده: {source.root})"
+                if not source.available_symbols():
+                    result.warnings.append(
+                        f"در {source.root} هیچ نمادی پیدا نشد؛ data.harvester_dir اشتباه است یا "
+                        "symbols.json/پوشهٔ ticks وجود ندارد" + where
+                    )
+            if not result.warnings or "هیچ کندل تازه‌ای" not in result.warnings[-1]:
+                result.warnings.append(
+                    "هیچ کندل تازه‌ای از منبع داده نیامد؛ اکسپرت متاتریدر یا مسیر را چک کن." + where
+                )
         stale = [i["symbol"] for i in result.ingest if i.get("stale")]
         if stale and isinstance(source, HarvesterSource):
             result.warnings.append(f"داده‌ی {len(stale)} نماد کهنه است: {', '.join(stale[:6])}")

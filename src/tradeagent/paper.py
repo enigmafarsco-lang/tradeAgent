@@ -525,6 +525,10 @@ class PaperEngine:
         if exit_price is None or exit_price <= 0:
             return None
 
+        return self._finalize(pos, exit_price, bar.t, reason, cycle)
+
+    def _finalize(self, pos: Position, exit_price: float, exit_ts: int, reason: str, cycle: int) -> Trade:
+        """ثبت یک خروج (هر دلیلی) و به‌روزرسانی بالانس/استریک."""
         pnl = pos.side * (exit_price / pos.entry_price - 1.0) * pos.notional
         pnl -= pos.notional * self.commission_bps / 1e4
         pnl_bps = pos.side * (exit_price / pos.entry_price - 1.0) * 1e4
@@ -535,7 +539,7 @@ class PaperEngine:
             side=pos.side,
             variant=pos.variant,
             entry_ts=pos.entry_ts,
-            exit_ts=bar.t,
+            exit_ts=exit_ts,
             entry_price=round(pos.entry_price, 10),
             exit_price=round(exit_price, 10),
             notional=round(pos.notional, 6),
@@ -566,6 +570,55 @@ class PaperEngine:
         )
         return trade
 
+    # -- بستن موقعیت‌های رهاشده -----------------------------------------
+    def _sweep_stale_positions(
+        self,
+        positions: dict[str, Position],
+        cycle: int,
+        now_ts: int,
+        warnings: list[str],
+    ) -> list[Trade]:
+        """موقعیت‌هایی که داده‌شان قطع شده را رها نکن.
+
+        تا پیش از این، خروج فقط داخل حلقهٔ کندل‌های *تازه* هر نماد بررسی می‌شد؛ اگر
+        نمادی از فید می‌افتاد (قطعی اکسپرت، تعطیلی نماد، حذف از واچ‌لیست) موقعیتش
+        برای همیشه باز می‌ماند - همان چیزی که دو پوزیشن ۱۸ ساعته ساخت و
+        ``trades`` را صفر نگه داشت. حالا هر چرخه، موقعیت‌های گذشته از ``hold_s``
+        با آخرین قیمت شناخته‌شده بسته می‌شوند.
+        """
+        if not now_ts:
+            return []
+        closed: list[Trade] = []
+        timeout_s = 0.0
+        late = 0.0
+        for symbol, pos in list(positions.items()):
+            age = now_ts - int(pos.entry_ts)
+            if age < int(pos.hold_s):
+                continue
+            hist = self.store.recent_bars(symbol, 1)
+            if hist:
+                bar = hist[-1]
+                half_spread = bar.spread_bps / 2.0 / 1e4
+                exit_price = bar.close * (1 - pos.side * (half_spread + self.slip_bps / 1e4))
+                if exit_price <= 0:
+                    exit_price = pos.entry_price
+                reason = "time"
+                late = max(late, float(age - int(pos.hold_s)))
+            else:
+                exit_price = pos.entry_price
+                reason = "stale"
+                timeout_s = max(timeout_s, float(age))
+            trade = self._finalize(pos, exit_price, now_ts, reason, cycle)
+            positions.pop(symbol, None)
+            closed.append(trade)
+        if closed:
+            reasons = {t.exit_reason for t in closed}
+            warnings.append(
+                f"{len(closed)} موقعیت رهاشده بسته شد "
+                f"({'/'.join(sorted(reasons))}; تأخیر تا {max(late, timeout_s):.0f}s)"
+            )
+        return closed
+
     # -- چرخه ---------------------------------------------------------
     def process(
         self,
@@ -579,6 +632,8 @@ class PaperEngine:
         positions = self.store.load_positions()
         closed: list[Trade] = []
         warnings: list[str] = []
+        # پیش از هر چیز: موقعیت‌هایی که داده‌شان مرده است را رها نکن
+        closed.extend(self._sweep_stale_positions(positions, cycle, now_ts, warnings))
         bars_processed = 0
         entries_blocked: str | None = None
 

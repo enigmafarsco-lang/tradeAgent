@@ -185,7 +185,7 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
                 f"{utc_iso(last_ts) if last_ts else '—'} | {lag_txt} | {state} |"
             )
     else:
-        lines.append("_داده‌ی ورودی در این چرخه ثبت نشد._")
+        lines.append("_داده‌ی ورودی در این چرخه ثبت نشد (هیچ نمادی خوانده نشد)._")
     lines.append("")
 
     # ۶) مدل زبانی

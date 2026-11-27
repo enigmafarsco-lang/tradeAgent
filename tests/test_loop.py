@@ -72,3 +72,26 @@ def test_manual_policy_respected(cfg: Config) -> None:
     runner.run_cycle(now_ts=1_700_000_000, publish=False)
     stored = runner.store.get_meta("policy")
     assert stored["variant"] in ("scalp", "momentum", "meanrev")
+
+
+def test_resolve_harvester_dir_finds_the_wine_prefix(tmp_path, monkeypatch) -> None:
+    """اگر کانفیگ مسیر اشتباه داشته باشد، مسیر واقعی زیر WINEPREFIX پیدا می‌شود."""
+    from tradeagent.loop import resolve_harvester_dir
+
+    prefix = tmp_path / "wine"
+    real = prefix / "drive_c/Program Files/MetaTrader 5/MQL5/Files/harvester"
+    (real / "ticks" / "EURUSD").mkdir(parents=True)
+    monkeypatch.setenv("WINEPREFIX", str(prefix))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    found = resolve_harvester_dir(tmp_path / "nope")
+    assert found == real
+
+
+def test_resolve_harvester_dir_keeps_a_working_path(tmp_path, monkeypatch) -> None:
+    from tradeagent.loop import resolve_harvester_dir
+
+    good = tmp_path / "harv"
+    (good / "ticks").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert resolve_harvester_dir(good) == good

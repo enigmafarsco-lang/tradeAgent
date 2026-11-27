@@ -137,3 +137,55 @@ def test_store_stats_and_positions(store: Store) -> None:
     assert stats["trades"] == 1
     assert stats["win_rate"] == 100.0
     assert store.per_symbol_stats()[0]["symbol"] == "BTCUSD"
+
+
+def test_stale_position_is_closed_when_its_feed_dies(cfg: Config, store: Store) -> None:
+    """سناریوی میدانی: نماد از فید می‌افتد و پوزیشن ۱۸ ساعت باز می‌ماند."""
+    engine = PaperEngine(cfg, store)
+    policy = new_policy("momentum")
+    prices = [100.0] * 360 + [101.0]
+    bars = make_bars(prices, start=1_700_000_000)
+    result = engine.process({"BTCUSD": bars}, policy, cycle=1, now_ts=bars[-1].t)
+    assert result.open_positions, "باید یک پوزیشن باز شود"
+    opened = bars[-1].t
+    assert store.load_positions(), "پوزیشن در انبار هست"
+
+    # دیگر هیچ کندلی برای این نماد نمی‌آید؛ فقط زمان می‌گذرد
+    later = opened + 18 * 3600
+    result2 = engine.process({}, policy, cycle=2, now_ts=later)
+    assert result2.closed_trades, "پوزیشن رهاشده باید بسته شود"
+    trade = result2.closed_trades[0]
+    assert trade["exit_reason"] == "time"
+    assert trade["exit_ts"] == later
+    assert not store.load_positions(), "دیگر پوزیشن بازی نمانده"
+    assert any("رهاشده" in w for w in result2.warnings)
+    assert store.stats()["trades"] == 1
+
+
+def test_stale_position_without_any_history_closes_flat(cfg: Config, store: Store) -> None:
+    """اگر هیچ کندلی در انبار نباشد، با قیمت ورود (بدون سود/زیان) بسته می‌شود."""
+    engine = PaperEngine(cfg, store)
+    pos = Position(
+        symbol="XAUUSD",
+        side=1,
+        entry_price=2000.0,
+        notional=1000.0,
+        risk_amount=10.0,
+        sl_price=1990.0,
+        tp_price=2020.0,
+        sl_bps=50.0,
+        tp_bps=100.0,
+        entry_ts=1_700_000_000,
+        hold_s=900,
+        variant="momentum",
+        policy_version=1,
+        opened_cycle=4,
+    )
+    store.save_position(pos)
+    warnings: list[str] = []
+    closed = engine._sweep_stale_positions({"XAUUSD": pos}, 5, 1_700_000_000 + 3600, warnings)
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "stale"
+    assert closed[0].exit_price == 2000.0
+    assert store.load_positions() == {}
+    assert warnings and "رهاشده" in warnings[0]
