@@ -73,7 +73,14 @@ if t.get("company"):
     print(f"  terminal={t.get('company')} build={t.get('build')}")
 ea = d.get("ea_log") or {}
 if ea.get("found"):
-    tag = "refused(4014)" if ea.get("refused") else ("connected" if ea.get("connected") else "no-line")
+    if ea.get("not_allowed"):
+        tag = "blocked(4014)"
+    elif ea.get("refused"):
+        tag = "refused(5272)"
+    elif ea.get("connected"):
+        tag = "connected"
+    else:
+        tag = "no-line"
     print(f"  EA log: {tag} · {ea.get('age_s')}s پیش · {pathlib.Path(ea.get('file','')).name}")
     for line in (ea.get("last") or [])[-1:]:
         print(f"    {line[:150]}")
@@ -85,6 +92,10 @@ if sock is False:
     print("  ! هیچ پروسه‌ای روی این آدرس گوش نمی‌دهد - مشکل پل، نه اکسپرت")
 elif sock is None:
     print("  وضعیت پل ناقص است (bridge در خروجی mt5_status نبود)؛ چند ثانیه بعد دوباره ببین")
+elif (d.get("ea_log") or {}).get("not_allowed"):
+    print("  ! err=4014 یعنی «Function is not allowed for call» - متاتریدر آدرس سوکت را مجاز نمی‌داند")
+    print("    Tools -> Options -> Expert Advisors -> «Allow WebRequest for listed URL»")
+    print("    و اضافه کن: 127.0.0.1  (اگر نپذیرفت: http://127.0.0.1 )")
 elif not b.get("ea_connected"):
     same = mt5.get("same_netns")
     if same is False:

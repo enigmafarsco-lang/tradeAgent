@@ -570,3 +570,29 @@ Experts  expert ... is disabled
 
 اگر آخرین اعلان «disabled» باشد، اکسپرت لود شده ولی اجرا نمی‌شود — دکمهٔ Algo Trading
 نوار ابزار و تیک «Allow Algo Trading» در تنظیمات خود اکسپرت را روشن کن.
+
+## `err=4014` یعنی اجازهٔ سوکت، نه «connection refused»
+
+`4014` در MQL5 برابر است با **ERR_FUNCTION_NOT_ALLOWED — «Function is not allowed for
+call»**. یعنی تابع `SocketConnect` حتی اجرا نشد؛ متاتریدر آدرس مقصد را در فهرست مجاز
+ندارد (مستندات MQL5: «Connection address should be added to the list of allowed ones on
+the client terminal side»). ارتباطی به بسته بودن ۸۷۸۷ یا namespace ندارد.
+
+مسیر در متاتریدر:
+
+```
+Tools -> Options -> Expert Advisors
+  [x] Allow WebRequest for listed URL
+  + اضافه کردن 127.0.0.1        (اگر نپذیرفت: http://127.0.0.1 )
+```
+
+بعد از OK، اکسپرت خودش دوباره تلاش می‌کند؛ در تب Experts باید
+`[trade-mcp] connected to 127.0.0.1:8787` بیاید و بعد `hello sent`.
+
+تفکیک کدها:
+
+| کد | معنا |
+|---|---|
+| 4014 | آدرس در فهرست مجاز نیست (تنظیمات متاتریدر) |
+| 5272/5273 | اتصال واقعاً برقرار نشد (سوکت بسته بود) |
+| 5270 | هندل سوکت نامعتبر |

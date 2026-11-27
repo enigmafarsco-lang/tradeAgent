@@ -153,6 +153,7 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
             "age_s": int(time.time() - newest.stat().st_mtime),
             "last": [],
             "refused": False,
+            "not_allowed": False,
             "connected": False,
             "no_line": True,
         }
@@ -162,7 +163,10 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
         "file": str(f),
         "age_s": int(time.time() - m),
         "last": ea[-3:],
-        "refused": any("err=4014" in ln for ln in ea[-8:]),
+        # 4014 = ERR_FUNCTION_NOT_ALLOWED («Function is not allowed for call»)، نه
+        # «connection refused»: متاتریدر آدرس را در لیست مجازِ سوکت ندارد.
+        "not_allowed": any("err=4014" in ln for ln in ea[-8:]),
+        "refused": any("err=5272" in ln or "err=5273" in ln for ln in ea[-8:]),
         "connected": any("connected" in ln.lower() for ln in ea[-8:]),
     }
 
@@ -199,5 +203,10 @@ def report() -> None:
         print(f"    {line[:150]}")
     if info.get("no_line"):
         print("    (هیچ خط trade-mcp در هیچ فایل لاگی نبود: اکسپرت روی چارت اجرا نشده)")
+    if info.get("not_allowed"):
+        print("  ! err=4014 یعنی «Function is not allowed for call» - نه بسته بودن سوکت.")
+        print("    متاتریدر آدرس سوکت را در لیست مجاز ندارد. مسیر:")
+        print("    Tools -> Options -> Expert Advisors -> تیک «Allow WebRequest for listed URL»")
+        print("    و اضافه کردن  127.0.0.1  (اگر نپذیرفت: http://127.0.0.1 )")
     for note in journal_notices(2):
         print(f"  اعلان متاتریدر: {note[:140]}")

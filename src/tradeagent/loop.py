@@ -384,6 +384,13 @@ class Runner:
 
         try:
             mcp_status = self.publish_mcp_status()
+            ea_info = mcp_status.get("ea_log") or {}
+            if ea_info.get("not_allowed"):
+                LOG.warning(
+                    "اکسپرت خطای 4014 می‌گیرد: متاتریدر آدرس %s را مجاز نمی‌داند "
+                    "(Tools > Options > Expert Advisors > Allow WebRequest for listed URL)",
+                    (mcp_status.get("bridge") or {}).get("listen", "127.0.0.1:8787"),
+                )
             if mcp_status.get("error") and "bind" in str(mcp_status.get("error")).lower():
                 result_warn = "پورت ۸۷۸۷ دست یک پروسهٔ دیگر است؛ نسخهٔ طلایی/عمومی را خاموش کن"
                 LOG.warning(result_warn)

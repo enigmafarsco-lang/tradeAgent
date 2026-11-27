@@ -167,7 +167,7 @@ def test_ea_log_is_read_from_the_prefix(tmp_path, monkeypatch) -> None:
 
     info = Runner._ea_log()
     assert info["found"] is True
-    assert info["refused"] is True
+    assert info["not_allowed"] is True
     assert "err=4014" in info["last"][-1]
 
 
@@ -191,7 +191,7 @@ def test_ea_log_prefers_the_file_that_has_expert_lines(tmp_path, monkeypatch) ->
 
     info = Runner._ea_log()
     assert "MQL5" in info["file"]
-    assert info["refused"] is True
+    assert info["not_allowed"] is True
 
 
 def test_ea_log_is_utf16_as_metatrader_writes_it(tmp_path, monkeypatch) -> None:
@@ -205,7 +205,7 @@ def test_ea_log_is_utf16_as_metatrader_writes_it(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
 
     info = Runner._ea_log()
-    assert info["refused"] is True
+    assert info["not_allowed"] is True
     assert "err=4014" in info["last"][-1]
 
 
@@ -234,3 +234,19 @@ def test_diag_surfaces_terminal_notices(tmp_path, monkeypatch) -> None:
         "GH 0 14:55:01.000 Experts automated trading is disabled\n", encoding="utf-8"
     )
     assert any("automated trading is disabled" in n for n in journal_notices())
+
+
+def test_diag_knows_4014_is_a_permission_error(tmp_path, monkeypatch) -> None:
+    """۴۰۱۴ = «Function is not allowed», نه connection refused."""
+    from tradeagent.diag import ea_log
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    logs = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "20261127.log").write_text(
+        "HK 0 15:16:05.028 TradeMCPConnector (XAUUSD_i,M1) [trade-mcp] connect to 127.0.0.1:8787 failed, err=4014\n",
+        encoding="utf-8",
+    )
+    info = ea_log()
+    assert info["not_allowed"] is True
+    assert info["refused"] is False
