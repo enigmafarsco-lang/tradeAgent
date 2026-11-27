@@ -342,3 +342,29 @@ window_s = 900
 قضاوت مدل در `state/forecasts.json` ثبت می‌شود و وقتی افقش سر رسید با قیمت واقعی نمره
 می‌گیرد؛ گزارش هر چرخه «کارنامهٔ پیش‌بینی‌های ایجنت» را نشان می‌دهد (نرخ درست + وزنی
 بر اساس اطمینان). این‌طوری ادعای مدل سنجیده می‌شود.
+
+## خطای کامپایل اکسپرت trade-mcp (LongToString)
+
+اگر MetaEditor این را داد:
+
+```
+undeclared identifier 'LongToString'    TradeMCPConnector.mq5  870 / 897
+'+' - unexpected token
+implicit conversion from 'unknown' to 'string'
+```
+
+این باگ خودِ trade-mcp است: تابع `LongToString` صدا زده شده ولی تعریف نشده و MQL5
+چنین تابعی ندارد. اصلاح:
+
+```bash
+./scripts/patch_trade_mcp_connector.sh
+```
+
+* تابع کمکی `string LongToString(const long value) { return IntegerToString(value); }`
+  را **بعد از آخرین `#include`** (نه بین `input`ها) درج می‌کند؛
+* هر دو نسخه را اصلاح می‌کند: کلون ریپو (`~/trade-mcp`) و نسخهٔ نصب‌شده در
+  `MQL5/Experts`؛ هر فایل نسخهٔ پشتیبان `.tradeagent-backup-<timestamp>` می‌گیرد؛
+* اگر MetaEditor64.exe پیدا شود، خودش کامپایل می‌کند و لاگ را نشان می‌دهد؛
+  اگر `.ex5` ساخته شد یعنی تمام.
+
+`connect_trade_mcp.sh` هم همین اصلاح را خودکار انجام می‌دهد.

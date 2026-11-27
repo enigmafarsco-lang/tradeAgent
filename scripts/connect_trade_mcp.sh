@@ -115,6 +115,14 @@ else
   if cmp -s "$SRC" "$DST"; then ok "نسخهٔ نصب‌شده با ریپو یکی است"; else warn "نسخهٔ نصب‌شده قدیمی است (بدون --check به‌روز می‌شود)"; fi
 fi
 
+# اکسپرتِ ریپوی trade-mcp با MQL5 کامپایل نمی‌شود (LongToString تعریف نشده)؛
+# همین‌جا اصلاحش می‌کنیم تا کاربر با خطای کامپایل روبه‌رو نشود.
+if [[ "$MODE" == "apply" ]]; then
+  step "۳.۵) اصلاح و کامپایل اکسپرت"
+  MT5_WINEPREFIX="$PREFIX" TRADE_MCP_DIR="$REPO" "$ROOT/scripts/patch_trade_mcp_connector.sh" \
+    || warn "اصلاح/کامپایل کامل نشد - لاگ بالا را ببین"
+fi
+
 step "۴) سوکت بریج"
 "$PY" - <<'PY'
 import socket

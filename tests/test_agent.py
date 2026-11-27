@@ -123,3 +123,16 @@ def test_local_tools_are_offered_and_usable() -> None:
     assert trace.calls[0].ok is True
     assert trace.momentum["direction"] == "up"
     assert trace.proposal["params"]["breakout_k"] == 1.1
+
+
+def test_patch_script_fixes_the_known_connector_error(tmp_path) -> None:
+    """اکسپرت trade-mcp تابع LongToString را صدا می‌زند ولی تعریف نکرده است."""
+    import subprocess
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "scripts" / "patch_trade_mcp_connector.sh"
+    assert src.exists(), "patch script must exist"
+    body = src.read_text(encoding="utf-8")
+    # تابع کمکی و نقطهٔ درج بعد از include باید در اسکریپت باشد
+    assert "string LongToString(const long value)" in body
+    assert 'stripped.startswith("#include")' in body
