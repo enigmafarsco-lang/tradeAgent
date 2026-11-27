@@ -95,3 +95,40 @@ def test_resolve_harvester_dir_keeps_a_working_path(tmp_path, monkeypatch) -> No
     (good / "ticks").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     assert resolve_harvester_dir(good) == good
+
+
+def test_bridge_status_is_published_for_the_watcher(cfg: Config) -> None:
+    """سوکت ۸۷۸۷ یک صاحب دارد؛ پس سرویس باید وضعیتش را روی دیسک بگذارد."""
+    runner = Runner(cfg)
+
+    class FakeMCP:
+        enabled = True
+        calls: list[str] = []
+
+        def call_tool(self, name, args=None):  # noqa: ANN001, ANN201
+            FakeMCP.calls.append(name)
+            assert name == "mt5_status"
+            return {
+                "ok": True,
+                "bridge": {"listen": "127.0.0.1:8787", "ea_connected": True, "ea_peer": "127.0.0.1:5"},
+                "terminal": {"company": "Alpari", "build": 6333},
+                "account": {"login": 53290594, "server": "Alpari-MT5-Demo", "balance": 9618.64},
+            }
+
+    runner.mcp = FakeMCP()
+    status = runner.publish_mcp_status()
+    assert status["ok"] is True
+    path = Path(cfg.state_dir) / "mcp_status.json"
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["bridge"]["ea_connected"] is True
+    assert on_disk["account"]["login"] == 53290594
+
+    class BrokenMCP(FakeMCP):
+        def call_tool(self, name, args=None):  # noqa: ANN001, ANN201
+            raise RuntimeError("cannot listen on 127.0.0.1:8787: [Errno 98] bind_failed")
+
+    runner.mcp = BrokenMCP()
+    status = runner.publish_mcp_status()
+    assert status["ok"] is False
+    assert "bind" in status["error"].lower()
+    assert "owner" in status["hint"].lower()

@@ -32,31 +32,31 @@ step() { printf '\n\033[1;35m=== %s\033[0m\n' "$*"; }
 
 if [[ "$MODE" == "watch" ]]; then
   step "انتظار برای وصل شدن اکسپرت"
-  printf '  در متاتریدر اکسپرت باید روی چارت %s باشد و Algo Trading روشن.\n' "$SYMBOL"
-  printf '  نکته: پورت ۸۷۸۷ فقط یک صاحب دارد؛ اگر سرویس در حال اجراست، وضعیت را از همان می‌خوانم.\n'
-  printf '  اگر اکسپرت «loaded» می‌گوید ولی وصل نمی‌شود: در تنظیمات خود اکسپرت (تب Common)\n'
-  printf '  تیک «Allow Algo Trading» را بزن و دکمهٔ Algo Trading نوار ابزار را روشن کن.\n'
+  printf '  اکسپرت باید روی چارت %s باشد و Algo Trading روشن.\n' "$SYMBOL"
+  printf '  این حالت تا Ctrl-C روشن می‌ماند: سوکت ۸۷۸۷ باز می‌ماند تا اکسپرت هر وقت\n'
+  printf '  تلاش کرد، جواب بگیرد (اگر ببندیم، متاتریدر «connection refused» می‌گیرد).\n'
 
   export ROOT SYMBOL
   "$PY" -u - <<'PY'
-import json, os, pathlib, socket, sys, time
+import json, os, pathlib, re, socket, subprocess, sys, time
 
 ROOT = pathlib.Path(os.environ["ROOT"])
 SYMBOL = os.environ.get("SYMBOL", "XAUUSD_i")
 sys.path.insert(0, str(ROOT / "src"))
 
-STATE = (ROOT / "var" / "state")
-STATUS_FILES = [p for p in [
-    ROOT / "var" / "state" / "mcp_status.json",
-    ROOT / "var" / "mcp_status.json",
-] if p.exists()]
+PREFIX = pathlib.Path(os.environ.get("MT5_WINEPREFIX") or (pathlib.Path.home() / "Wine"))
+EXPERT_LOGS = sorted(
+    (PREFIX / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs").glob("*.log"),
+    key=lambda f: f.stat().st_mtime,
+)
+STATUS_FILES = [p for p in [ROOT / "var" / "state" / "mcp_status.json", ROOT / "var" / "mcp_status.json"] if p.exists()]
 
 
-def port_open() -> bool:
+def port_open(host="127.0.0.1", port=8787) -> bool:
     s = socket.socket()
     s.settimeout(0.5)
     try:
-        s.connect(("127.0.0.1", 8787))
+        s.connect((host, port))
         return True
     except OSError:
         return False
@@ -64,8 +64,33 @@ def port_open() -> bool:
         s.close()
 
 
-def read_service_status():
-    """اگر سرویس (که صاحب سوکت است) وضعیت را منتشر کرده باشد، از او بخوان."""
+def ea_log_tail(n=3):
+    """آخرین خطوط سمت متاتریدر، تا لازم نباشد کاربر لاگ را کپی کند."""
+    if not EXPERT_LOGS:
+        return []
+    try:
+        lines = EXPERT_LOGS[-1].read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+    return keep[-n:]
+
+
+def port_owner():
+    """چه پروسه‌ای پورت را گرفته؟ تا کاربر بداند نسخهٔ دوم چرا بالا نمی‌آید."""
+    for cmd in (["ss", "-ltnp"], ["ss", "-ltn"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            if ":8787" in line:
+                m = re.search(r"\(\(\"([^\"]+)\",pid=(\d+)", line)
+                return f"{m.group(1)} pid {m.group(2)}" if m else line.split()[-1]
+    return None
+
+
+def service_status():
     newest, data = 0.0, None
     for path in STATUS_FILES:
         try:
@@ -75,70 +100,90 @@ def read_service_status():
             continue
         if m > newest:
             newest, data = m, d
-    if data is None:
-        return None
-    return data if time.time() - newest < 900 else None
+    return data if data and time.time() - newest < 900 else None
 
 
-owned = port_open()
 client = None
-if not owned:
+if port_open():
+    print("  [watch] پورت ۸۷۸۷ باز است - صاحبش را (سرویس حلقه) می‌پرسم، نسخهٔ دوم نمی‌سازم")
+else:
     from tradeagent.mcp_client import MCPClient
     client = MCPClient("trade-mcp serve", timeout_s=25)
-    if client.start():
-        print("  [watch] یک سرور MCP بالا آوردم؛ تا وصل شدن زنده نگهش می‌دارم (نسخهٔ دوم ساخته نمی‌شود)")
-    else:
-        print("  [watch] سرور MCP بالا نیامد (نصب است؟)")
+    if not client.start():
+        print("  [watch] سرور MCP بالا نیامد (نصب trade-mcp را چک کن)")
         sys.exit(1)
-else:
-    print("  [watch] پورت ۸۷۸۷ دست یک پروسهٔ دیگر است - همان صاحب سوکت را می‌پرسم")
+    print("  [watch] سرور MCP بالا آمد و تا Ctrl-C باز می‌ماند")
 
+connected_reported = False
 try:
-    for attempt in range(1, 361):   # ~۳۰ دقیقه
+    for attempt in range(1, 721):
         status = None
         if client is not None:
             try:
                 status = client.call_tool("mt5_status")
             except Exception as exc:
-                status = {"ok": False, "error": str(exc)}
+                status = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         else:
-            status = read_service_status() or {"ok": False, "error": "سرویس وضعیت منتشر نکرده"}
+            status = service_status()
+            if status is None:
+                owner = port_owner()
+                status = {
+                    "ok": False,
+                    "error": f"8787 held by {owner or 'unknown process'} but no status file "
+                             f"(var/state/mcp_status.json) - that owner is the bridge; "
+                             f"restart the gold service or stop the owner",
+                }
 
-        bridge = (status or {}).get("bridge") or {}
-        ok = bool((status or {}).get("ok")) and bool(bridge.get("ea_connected", True))
-        if ok:
-            term = (status or {}).get("terminal") or {}
-            acc = (status or {}).get("account") or {}
-            print(f"\n  ✓ وصل شد! {term.get('company', '?')} | build {term.get('build', '?')} | "
-                  f"account {acc.get('login')} ({acc.get('server')}) balance={acc.get('balance')}")
-            print(f"  سوکت: {bridge.get('listen', '127.0.0.1:8787')} | متصل از "
-                  f"{bridge.get('connected_for_seconds', '?')} ثانیه پیش")
+        status = status or {}
+        bridge = status.get("bridge") or {}
+        ea = bool(bridge.get("ea_connected"))
+        listen = bridge.get("listen") or "?"
+        err = status.get("error")
+
+        if ea and not connected_reported:
+            term = status.get("terminal") or {}
+            acc = status.get("account") or {}
+            hello = bridge.get("ea_hello") or {}
+            print(f"\n  ✓ وصل شد!  listen={listen}  peer={bridge.get('ea_peer')}")
+            print(f"    {term.get('company', '?')} build {term.get('build', '?')} · account "
+                  f"{acc.get('login')} ({acc.get('server')}) balance={acc.get('balance')} "
+                  f"equity={acc.get('equity')}")
+            if hello:
+                print(f"    EA: {json.dumps(hello, ensure_ascii=False)[:200]}")
             if client is not None:
                 try:
                     snap = client.call_tool("market_snapshot", {"symbol": SYMBOL})
                     q = (snap or {}).get("quote") or {}
-                    print(f"  {SYMBOL}: bid={q.get('bid')} ask={q.get('ask')} spread={(snap or {}).get('spread_points')} points")
+                    print(f"    {SYMBOL}: bid={q.get('bid')} ask={q.get('ask')} "
+                          f"spread={(snap or {}).get('spread_points')} points")
                     an = client.call_tool("analyze_market", {"symbol": SYMBOL})
-                    print("  --- تحلیل ابزار trade-mcp ---")
-                    print(json.dumps(an, ensure_ascii=False)[:900])
+                    print("    --- analyze_market ---")
+                    print("    " + json.dumps(an, ensure_ascii=False)[:1200])
                 except Exception as exc:
-                    print("  تحلیل نشد:", exc)
+                    print("    تحلیل نشد:", exc)
             else:
-                print("  (تحلیل را سرویس در چرخهٔ بعد با همین ابزارها انجام می‌دهد)")
-            sys.exit(0)
-
-        err = (status or {}).get("error")
-        extra = f" · {err}" if err else ""
-        print(f"  [{attempt:02d}] هنوز وصل نیست{extra}")
+                print("    (تحلیل را خودِ سرویس در چرخهٔ بعد با همین ابزارها انجام می‌دهد)")
+            print("\n  سوکت باز می‌ماند؛ Ctrl-C برای توقف.")
+            connected_reported = True
+        elif connected_reported:
+            if not ea:
+                print(f"\n  ! اکسپرت قطع شد (peer={bridge.get('ea_peer')}) - منتظر وصل شدن دوباره…")
+                connected_reported = False
+            elif attempt % 6 == 0:
+                print(f"  [ok] هنوز وصل است · peer={bridge.get('ea_peer')} · "
+                      f"{bridge.get('connected_for_seconds')}s")
+        else:
+            socket_note = f"8787={'open' if port_open() else 'refused'}"
+            print(f"  [{attempt:02d}] ea=no listen={listen} {socket_note} · {err}")
+            tail = ea_log_tail(1)
+            if tail:
+                print(f"      MT5: {tail[0][:160]}")
         time.sleep(5)
-    print("\n  بعد از ۳۰ دقیقه وصل نشد. اگر اکسپرت روی چارت است، لاگ Experts متاتریدر را ببین:")
-    print("    Journal/Experts: «TradeMCPConnector … loaded» سپس «connected»")
-    sys.exit(2)
 finally:
     if client is not None:
         client.close()
 PY
-  exit $?
+  exit 0
 fi
 
 step "۱) ریپوی trade-mcp"

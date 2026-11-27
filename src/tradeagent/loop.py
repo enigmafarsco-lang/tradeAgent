@@ -195,6 +195,11 @@ class Runner:
             except Exception as exc:  # noqa: BLE001
                 status["ok"] = False
                 status["error"] = f"{type(exc).__name__}: {exc}"
+                if "bind" in str(exc).lower():
+                    status["hint"] = (
+                        "port 8787 already has an owner (another trade-mcp/loop); only one "
+                        "process can host the bridge - stop the other one"
+                    )
         try:
             write_json(self.state_dir / "mcp_status.json", status)
         except OSError:
