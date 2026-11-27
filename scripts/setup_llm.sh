@@ -665,6 +665,7 @@ gpu_diag() {
 
   if ! (( nv_ok )); then
     echo "--- if the NVIDIA module refuses to load ---"
+    echo "  ./scripts/fix_nvidia.sh             # tries the signed-module route, then explains the rest"
     echo "  sudo modprobe nvidia                # prints the real reason"
     if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
       warn "Secure Boot is ON: unsigned DKMS modules are refused. Either enrol the MOK key"
