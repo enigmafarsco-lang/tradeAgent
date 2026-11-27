@@ -364,5 +364,5 @@ def test_contract_survives_percent_formatting() -> None:
     from tradeagent.agent import CONTRACT
 
     text = CONTRACT % {"max_calls": 6}
-    assert "max 6 tools" in text
+    assert "at most 6 tools" in text
     assert "basis points" in text
