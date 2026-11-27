@@ -47,6 +47,8 @@ action = grab(r"اقدام: (.+)", verify, "—")
 mom = grab(r"حکم تکانه: (.+)", verify)
 analysis = grab(r"تحلیل: (.{0,120})", verify)
 ea_line = grab(r"اتصال اکسپرت: (.+)", verify, "—")
+agent_bridge = grab(r"پل ایجنت: (.+)", verify, "?")
+bridge_off = agent_bridge.startswith("خاموش")
 ea_ok = "صلح شد" in ea_line
 ea_why = ea_line
 ea_price = 0.0
@@ -69,10 +71,12 @@ except ValueError:
 
 def price_line() -> str:
     ours = price.get("ours") or {}
-    theirs = {"ok": ea_ok, "price": ea_price} if ea_ok else {"ok": False, "why": ea_why}
+    theirs = {"ok": ea_ok, "price": ea_price} if (ea_ok and not bridge_off) else {"ok": False, "why": ea_why}
     if not ours.get("ok"):
         return f"قیمت تیک ما: — ({ours.get('why')})"
     base = f"قیمت تیک ما: {ours.get('bid')}/{ours.get('ask')}"
+    if bridge_off:
+        return base + " | MT5: خاموش (طبق تنظیم)"
     if not theirs.get("ok"):
         return base + f" | MT5: — ({theirs.get('why')})"
     diff_bp = abs(float(theirs["price"]) - float(ours["bid"])) / float(ours["bid"]) * 1e4
@@ -99,11 +103,12 @@ if bridge == "?":
         hint = next((ln.strip() for ln in diag.splitlines() if ln.strip()), "")
     print(f"متاتریدر: {mt5} | پل: ؟ | {hint[:90]}")
 else:
-    print(f"متاتریدر: {mt5} | پل: {bridge}")
+    print(f"متاتریدر: {mt5} | پل: {'خاموش' if bridge_off else bridge}")
 ea = next((ln.strip() for ln in diag.splitlines() if "trade-mcp]" in ln), "")
 if ea:
     print(f"آخرین خط اکسپرت: {ea[:110]}")
-print(f"اتصال اکسپرت در این چرخه: {ea_line}")
+if not bridge_off:
+    print(f"اتصال اکسپرت در این چرخه: {ea_line}")
 print(f"تیک XAUUSD_i: {ticks} فایل، آخرین {age} ثانیه پیش")
 print(price_line())
 print(f"چرخه {cycle} | bars={bars} | llm={llm} | equity={equity}")
@@ -118,7 +123,7 @@ if analysis != "?":
 if error not in ("-", "?"):
     print(f"خطای ایجنت: {error}")
 bad = []
-if bridge not in ("True", "?"):
+if not bridge_off and bridge not in ("True", "?"):
     bad.append("اکسپرت وصل نیست (ابزارهای متاتریدر نمی‌آیند)")
 if llm != "True":
     bad.append("مدل جواب نداد")

@@ -580,3 +580,22 @@ def test_bridge_processes_are_found_by_cmdline(tmp_path) -> None:
     for pid, cmd in bridge_pids():
         assert cmd
         assert "trade-mcp" in cmd
+
+
+def test_with_mcp_off_the_agent_uses_only_local_tools(cfg: Config) -> None:
+    """پل متاتریدر unreliable است؛ چرخه باید با تیک‌های خودمان کامل کار کند."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    conf = tomllib.loads((root / "configs" / "gold.toml").read_text(encoding="utf-8"))
+    assert conf["agent"]["use_mcp"] is False
+
+    runner = Runner(cfg)
+    assert runner.agent_mcp is False
+    assert runner.agent is not None
+    names = [t["name"] for t in runner.agent.available_tools()]
+    assert names == ["local_tick_digest", "local_candles"]
+
+    body = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert 'USE_MCP=' in body and 'WAIT_EA=0' in body

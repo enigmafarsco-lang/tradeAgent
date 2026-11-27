@@ -35,6 +35,9 @@ max_rounds = 3
 max_calls = 6
 skill_prompt = "gold_session_briefing"
 skill_symbol = "XAUUSD_i"
+# ابزارهای متاتریدر از راه پل MCP unreliable بودند (اکسپرت پاسخ نمی‌داد و هر چرخه ۹۰ ثانیه
+# منتظر می‌ماند). دادهٔ لازم از فایل تیک خودمان می‌آید، پس پل برای ایجنت خاموش است.
+use_mcp = false
 
 [nowcast]
 enabled = true

@@ -122,27 +122,28 @@ class Runner:
         self.advisor = LLMAdvisor(cfg, self.state_dir / "llm_calls.json")
         # ایجنت ابزاردار: اگر MCP پیکربندی شده باشد، مدل خودش داده می‌گیرد
         self.ledger = ForecastLedger(path=self.state_dir / "forecasts.json").load()
-        self.mcp = mcp_from_config(cfg)
+        self.agent_mcp = bool(cfg.get("agent.use_mcp", True))
+        self.mcp = mcp_from_config(cfg) if self.agent_mcp else None
         self.agent: ToolAgent | None = None
-        if self.mcp.enabled and self.mcp.start():
+        if self.mcp is not None and self.mcp.enabled and self.mcp.start():
             allow = cfg.get("agent.allow_tools", None)
-            self.agent = ToolAgent(
-                chat=self.advisor.chat,
-                mcp=self.mcp,
-                local_tools=self._local_tools(),
-                allow=list(allow) if isinstance(allow, list) else None,
-                max_rounds=int(cfg.get("agent.max_rounds", 3)),
-                max_calls=int(cfg.get("agent.max_calls", 6)),
-                price_ref=self._reference_price,
-            )
             LOG.info(
-                "ایجنت ابزاردار فعال شد: %s (%d ابزار)",
-                self.mcp.server_info.get("name", "mcp"),
-                len(self.mcp.tools),
+                "ایجنت با MCP: %s (%d ابزار سرور)", self.mcp.server_info.get("name", "mcp"), len(self.mcp.tools)
             )
-        elif self.mcp.enabled:
-            LOG.warning("MCP پیکربندی شده ولی بالا نیامد؛ چرخه قطعی ادامه می‌دهد")
+        elif self.mcp is not None and self.mcp.enabled:
+            LOG.warning("MCP پیکربندی شده ولی بالا نیامد؛ چرخه فقط با تیک‌های خودمان ادامه می‌دهد")
             self.mcp.enabled = False
+        # ایجنت همیشه ساخته می‌شود؛ اگر پل خاموش باشد فقط ابزارهای محلی را دارد
+        allow = cfg.get("agent.allow_tools", None)
+        self.agent = ToolAgent(
+            chat=self.advisor.chat,
+            mcp=self.mcp if (self.mcp is not None and self.mcp.enabled) else None,
+            local_tools=self._local_tools(),
+            allow=list(allow) if isinstance(allow, list) else None,
+            max_rounds=int(cfg.get("agent.max_rounds", 3)),
+            max_calls=int(cfg.get("agent.max_calls", 6)),
+            price_ref=self._reference_price,
+        )
         self.publisher = Publisher(cfg, cfg.root)
         self.local_cycles = self.reports_dir / "cycles.jsonl"
         self._running = True
@@ -477,7 +478,7 @@ class Runner:
     ) -> dict[str, Any]:
         now_ts = int(now_ts or time.time())
         ea_wait: dict[str, Any] | None = None
-        if wait_ea_s > 0:
+        if wait_ea_s > 0 and self.agent_mcp:
             try:
                 ea_wait = self.wait_for_ea(wait_ea_s)
             except Exception as exc:  # noqa: BLE001
@@ -498,6 +499,8 @@ class Runner:
             ingest = source.fetch(now_s=now_ts)
 
         try:
+            if not self.agent_mcp:
+                raise RuntimeError("پل برای ایجنت خاموش است (agent.use_mcp=false)")
             mcp_status = self.publish_mcp_status()
             ea_info = mcp_status.get("ea_log") or {}
             if ea_info.get("not_allowed"):
@@ -766,6 +769,7 @@ class Runner:
             "momentum": result.extra.get("momentum"),
             "ea_wait": ea_wait,
             "agent_action": result.extra.get("agent_action"),
+            "mcp_enabled": self.agent_mcp,
             # بعد از حکم مدل هم ممکن است پوزیشن باز شده باشد؛ از دیسک بخوان
             "open_positions": len(self.store.load_positions()),
             "equity": result.equity,

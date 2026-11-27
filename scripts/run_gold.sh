@@ -178,6 +178,11 @@ if [[ "$MODE" == "verify" ]]; then
   done
   rm -f var/loop.lock
 
+  # اگر ایجنت از پل استفاده نکند، نه پل قبلی مهم است نه انتظار اکسپرت
+  USE_MCP="$("$PY" -c "from tradeagent.config import Config; print(1 if Config.load('configs/gold.toml').get('agent.use_mcp', True) else 0)" 2>/dev/null || echo 1)"
+  if [[ "$USE_MCP" == "0" ]]; then
+    dim "ایجنت با MCP کار نمی‌کند (agent.use_mcp=false) → بدون انتظار اکسپرت"
+  else
   # پلِ جاماندهٔ سرویس را ببند، وگرنه اکسپرت به آن وصل می‌ماند و پرسش‌های ما بی‌جواب می‌مانند
   "$PY" - <<'PY'
 import json
@@ -191,8 +196,11 @@ info = kill_stale_bridges()
 print(f"[gold] پل قبلی: {len(info['killed'])} پروسه بسته شد، پورت آزاد={info['port_free']} ({info['waited_s']}s)")
 PY
 
-  # سرویس خوابیده، پس اکسپرت باید دوباره به پلِ همین پروسه وصل شود (تا ۹۰ ثانیه)
-  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm --wait-ea 90 > /tmp/tradeagent-verify.json 2>&1
+  fi
+
+  WAIT_EA=0
+  [[ "$USE_MCP" == "1" ]] && WAIT_EA=90
+  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm --wait-ea "$WAIT_EA" > /tmp/tradeagent-verify.json 2>&1
   "$PY" - <<'PY'
 import json, os, pathlib
 
@@ -242,6 +250,7 @@ if act:
           f"notional={act.get('notional')} نگهداری={act.get('hold_s')}s" if act.get('action') == 'open'
           else f"| {act.get('reason') or ''}"))
 print(f"  پوزیشن باز: {data.get('open_positions')}")
+print("  پل ایجنت: " + ("خاموش (ایجنت فقط از تیک‌های خودمان می‌خواند)" if data.get("mcp_enabled") is False else "روشن"))
 ea = data.get("ea_wait") or {}
 print("  اتصال اکسپرت: " + (
     f"صلح شد در {ea.get('after_s')}s · قیمت MT5={ea.get('price')}" if ea.get("ok")
