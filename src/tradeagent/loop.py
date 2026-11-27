@@ -14,7 +14,9 @@ from typing import Any
 
 from .config import Config
 from .features import compute_features
-from .llm import LLMAdvisor
+from .agent import ToolAgent
+from .llm import LLMAdvisor, LLMResult
+from .mcp_client import mcp_from_config
 from .paper import CycleResult, PaperEngine, Store
 from .policy import (AdaptiveController, Decision, baseline_params, describe, new_policy,
                      sanitize_for_log, validate_proposal)
@@ -92,6 +94,26 @@ class Runner:
             max_level=int(cfg.get("policy.max_level", 5)),
         )
         self.advisor = LLMAdvisor(cfg, self.state_dir / "llm_calls.json")
+        # ایجنت ابزاردار: اگر MCP پیکربندی شده باشد، مدل خودش داده می‌گیرد
+        self.mcp = mcp_from_config(cfg)
+        self.agent: ToolAgent | None = None
+        if self.mcp.enabled and self.mcp.start():
+            allow = cfg.get("agent.allow_tools", None)
+            self.agent = ToolAgent(
+                chat=self.advisor.chat,
+                mcp=self.mcp,
+                allow=list(allow) if isinstance(allow, list) else None,
+                max_rounds=int(cfg.get("agent.max_rounds", 3)),
+                max_calls=int(cfg.get("agent.max_calls", 6)),
+            )
+            LOG.info(
+                "ایجنت ابزاردار فعال شد: %s (%d ابزار)",
+                self.mcp.server_info.get("name", "mcp"),
+                len(self.mcp.tools),
+            )
+        elif self.mcp.enabled:
+            LOG.warning("MCP پیکربندی شده ولی بالا نیامد؛ چرخه قطعی ادامه می‌دهد")
+            self.mcp.enabled = False
         self.publisher = Publisher(cfg, cfg.root)
         self.local_cycles = self.reports_dir / "cycles.jsonl"
         self._running = True
@@ -108,6 +130,17 @@ class Runner:
             state_path=self.state_dir / "ingest_state.json",
             stale_after_s=float(self.cfg.get("data.stale_after_s", 180)),
         )
+
+    def skill_text(self) -> str:
+        """متن مهارت آماده از trade-mcp (مثلاً gold_session_briefing)."""
+        name = self.cfg.get("agent.skill_prompt", "")
+        if not name or self.mcp is None or not self.mcp.enabled:
+            return ""
+        try:
+            return self.mcp.get_prompt(str(name), {"symbol": self.cfg.get("agent.skill_symbol", "XAUUSD")})
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("خواندن پرامپت مهارت %s شکست خورد: %s", name, exc)
+            return ""
 
     # -- سیاست ---------------------------------------------------------
     def current_policy(self) -> dict[str, Any]:
@@ -227,7 +260,15 @@ class Runner:
         base = next_policy
         if self.advisor.should_consult(cycle, force=force_llm):
             context = self.build_llm_context(result, base)
-            llm = self.advisor.consult(context, force=force_llm)
+            if self.agent is not None:
+                trace = self.agent.run(context, skill_text=self.skill_text())
+                result.extra["agent"] = trace.as_dict()
+                if trace.error:
+                    result.warnings.append(f"ایجنت: {trace.error}")
+                llm = LLMResult(trace.proposal, {"provider": "agent", **trace.as_dict()})
+                LOG.info("ایجنت: %s", trace.summary())
+            else:
+                llm = self.advisor.consult(context, force=force_llm)
             meta = dict(llm.meta)
             result.llm_meta = meta
             if llm.proposal is not None:

@@ -268,3 +268,37 @@ systemctl --user start tradeagent-loop
   بالا می‌آورد و تا ۳۰۰ ثانیه (`WATCH_WAIT`) منتظر ضربان تازه می‌ماند؛
 * اگر باز هم نیامد، **خودش** علت را از `var/logs/mt5.out` و جدیدترین لاگ ترمینال
   (خطوط Expert/error) چاپ می‌کند و می‌گوید مشکل Wine/نمایش است یا اکسپرت.
+
+## ایجنت ابزاردار با trade-mcp
+
+چرخه می‌تواند به‌جای «حدس از خلاصه»، خودش داده بگیرد. کلاینت MCP داخل پروژه است
+(`src/tradeagent/mcp_client.py`) و ایجنت در `src/tradeagent/agent.py`.
+
+```bash
+# نصب یک‌بار
+git clone https://github.com/enigmafarsco-lang/trade-mcp.git ~/trade-mcp
+cd ~/trade-mcp && python3 -m venv .venv && .venv/bin/pip install -e .
+# تست بدون متاتریدر (داده‌ی ساختگی):
+trade-mcp --mock serve
+```
+
+در `configs/*.toml`:
+
+```toml
+[mcp]
+server_cmd = "trade-mcp serve"     # یا "trade-mcp --mock serve" برای تست
+enabled = true
+
+[agent]
+max_rounds = 3
+max_calls = 6
+skill_prompt = "gold_session_briefing"
+skill_symbol = "XAUUSD"
+```
+
+قرارداد مدل: `{"analysis", "tool_calls", "proposal"}`. ابزارهای اجرای سفارش
+(`propose_order`, `confirm_proposal`, …) **برای ایجنت مسدودند**؛ این سیستم کاغذی است.
+ترتیب هر چرخه: مدل ابزار می‌خواهد → سرور MCP جواب می‌دهد → نتیجه به مدل → پیشنهاد →
+`validate_proposal` → گزارش (بخش ۶ نشان می‌دهد چه ابزاری صدا خورد و چه شد).
+
+پروفایل طلا: `configs/gold.toml` (یک نماد، هر چرخه مدل).

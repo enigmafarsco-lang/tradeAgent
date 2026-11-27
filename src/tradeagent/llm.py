@@ -227,6 +227,52 @@ class LLMAdvisor:
             text = json.dumps(data, ensure_ascii=False)[:800]
         return text, {"model": self.ollama_model}
 
+
+    # -- گفت‌وگوی آزاد برای ایجنت ابزاردار -----------------------------
+    def chat(self, messages: list[dict[str, str]]) -> str:
+        """پیام‌های آماده را بفرست و متن خام برگردان (برای حلقهٔ ابزار)."""
+        ok, why = self.available()
+        if not ok:
+            raise RuntimeError(why or "مدل در دسترس نیست")
+        if self.calls_last_hour() >= self.max_calls_per_hour:
+            raise RuntimeError(f"سهمیهٔ ساعتی مدل ({self.max_calls_per_hour}) پر است")
+        self._record_call()
+        if self.provider == "ollama":
+            url = f"{self.ollama_url}/api/chat"
+            payload = {
+                "model": self.ollama_model,
+                "stream": False,
+                "options": {"temperature": 0.3, "num_predict": 700},
+                "messages": messages,
+            }
+            data = self.transport(url, payload, {}, self.timeout)
+            try:
+                return str(data["message"]["content"])
+            except (KeyError, TypeError):
+                return json.dumps(data, ensure_ascii=False)[:800]
+        if self.provider == "gemini":
+            key = self.api_key()
+            system = "\n".join(m.get("content", "") for m in messages if m.get("role") == "system")
+            contents = [
+                {
+                    "role": "model" if m.get("role") == "assistant" else "user",
+                    "parts": [{"text": str(m.get("content", ""))}],
+                }
+                for m in messages
+                if m.get("role") != "system"
+            ]
+            payload = {
+                "systemInstruction": {"parts": [{"text": system or SYSTEM_PROMPT}]},
+                "contents": contents,
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 900},
+            }
+            data, _extra = self._gemini_post(key, payload)
+            try:
+                return str(data["candidates"][0]["content"]["parts"][0]["text"])
+            except (KeyError, IndexError, TypeError):
+                return json.dumps(data, ensure_ascii=False)[:800]
+        raise RuntimeError(f"provider پشتیبانی‌نشده: {self.provider}")
+
     def consult(self, context: dict[str, Any], force: bool = False) -> LLMResult:
         ok, why = self.available()
         meta: dict[str, Any] = {

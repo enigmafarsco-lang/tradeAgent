@@ -192,7 +192,26 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
     lines.append("## ۶) مدل زبانی")
     lines.append("")
     meta = result.llm_meta or {}
-    if not meta:
+    if meta.get("provider") == "agent":
+        # مسیر ایجنت ابزاردار: چه ابزارهایی صدا زده شد و چه پیشنهادی آمد
+        calls = meta.get("calls") or []
+        lines.append(f"- مسیر: **ایجنت ابزاردار (MCP)** · دور گفت‌وگو: {meta.get('rounds', 0)}")
+        if calls:
+            lines.append("- ابزارهای صدا زده‌شده:")
+            for call in calls[:10]:
+                mark = "✓" if call.get("ok") else "✗"
+                errnote = f" · {call.get('error')}" if call.get("error") else ""
+                lines.append(
+                    f"  - `{call.get('tool')}` {mark} · {call.get('elapsed_ms', 0)}ms{errnote}"
+                )
+        else:
+            lines.append("- ابزاری صدا زده نشد (مدل مستقیم تصمیم گرفت).")
+        if meta.get("analysis"):
+            lines.append(f"- تحلیل مدل: {str(meta['analysis'])[:400]}")
+        if meta.get("error"):
+            lines.append(f"- خطا: `{meta.get('error')}`")
+        lines.append(f"- نتیجه: **{result.llm_note or 'پیشنهادی نداد'}**")
+    elif not meta:
         lines.append("_مدل زبانی در این چرخه صدا زده نشد (طبق `llm.every_cycles`)._")
     elif not meta.get("ok"):
         lines.append(f"- وضعیت: **بدون پاسخ** · `{meta.get('provider')}` · علت: {meta.get('error', '—')}")

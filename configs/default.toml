@@ -73,3 +73,20 @@ max_commits_per_hour = 20
 push_timeout_s = 120
 author_name = "tradeagent-bot"
 author_email = "tradeagent@localhost"
+
+# ---------------------------------------------------------------------------
+# ایجنت ابزاردار (MCP) — ابزارهای trade-mcp داخل همین چرخه
+# ---------------------------------------------------------------------------
+[mcp]
+# سرور MCP. اگر trade-mcp نصب باشد همین کار می‌کند؛ --mock داده‌ی ساختگی می‌دهد
+# (برای تست بدون متاتریدر). خالی = غیرفعال.
+server_cmd = "trade-mcp serve"
+enabled = true
+timeout_s = 25.0
+
+[agent]
+max_rounds = 3          # حداکثر دور گفت‌وگو با مدل
+max_calls = 6           # حداکثر فراخوانی ابزار در یک چرخه
+skill_prompt = "gold_session_briefing"   # مهارت آمادهٔ trade-mcp
+skill_symbol = "XAUUSD"
+# allow_tools = ["analyze_market", "market_snapshot", "risk_report"]

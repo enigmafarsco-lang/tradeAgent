@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# پروفایل طلا: یک نماد، ایجنت ابزاردار روی trade-mcp، معاملهٔ کاغذی
+#   .venv/bin/tradeagent --config configs/gold.toml loop --interval 300
+# ---------------------------------------------------------------------------
+[data]
+source = "harvester"
+harvester_dir = "~/Wine/drive_c/Program Files/MetaTrader 5/MQL5/Files/harvester"
+stale_after_s = 120
+symbols = ["XAUUSD_i"]        # فقط طلا
+
+[paper]
+starting_balance = 10000.0
+max_open = 2
+risk_per_trade_pct = 0.5
+daily_loss_stop_pct = 3.0
+
+[policy]
+baseline_variant = "momentum"
+
+[llm]
+provider = "ollama"
+ollama_url = "http://127.0.0.1:11434"
+ollama_model = "qwen2.5:7b-instruct"
+every_cycles = 1          # برای طلا هر چرخه از مدل بپرس
+max_calls_per_hour = 20
+timeout_s = 90
+
+[mcp]
+server_cmd = "trade-mcp serve"
+enabled = true
+timeout_s = 25.0
+
+[agent]
+max_rounds = 3
+max_calls = 6
+skill_prompt = "gold_session_briefing"
+skill_symbol = "XAUUSD"
+
+[publish]
+enabled = true
+branch = "reports"
+interval_s = 300
