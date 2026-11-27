@@ -554,3 +554,36 @@ def test_unknown_tool_lists_every_name() -> None:
     )
     trace = agent.run({})
     assert "local_tick_digest" in trace.calls[0].error
+
+
+def test_mcp_call_is_retried_once_when_the_bridge_blinks() -> None:
+    """اکسپرت هر دقیقه یک بار قطع/وصل می‌شود؛ یک بار دیگر امتحان کن، نه اینکه ابزار بمیرد."""
+    class MCP:
+        def __init__(self) -> None:
+            self.tries = 0
+
+        def tools_for_prompt(self, allow=None, limit=24):  # noqa: ANN001
+            return [{"name": "account_info", "description": "", "args": {}}]
+
+        def call_tool(self, name, arguments=None):  # noqa: ANN001
+            self.tries += 1
+            if self.tries == 1:
+                raise RuntimeError("peer closed")
+            return {"balance": 9500, "login": 53290594}
+
+    mcp = MCP()
+    agent = ToolAgent(
+        chat=lambda m: json.dumps(
+            {
+                "analysis": "تحلیل",
+                "tool_calls": [{"tool": "account_info", "arguments": {}}],
+                "momentum": {"direction": "up", "phase": "steady"},
+                "proposal": None,
+            }
+        ),
+        mcp=mcp,
+        max_rounds=1,
+    )
+    trace = agent.run({})
+    assert mcp.tries == 2
+    assert trace.calls[0].ok

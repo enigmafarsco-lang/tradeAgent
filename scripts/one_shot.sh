@@ -104,6 +104,8 @@ if analysis != "?":
 if error not in ("-", "?"):
     print(f"خطای ایجنت: {error}")
 bad = []
+if bridge not in ("True", "?"):
+    bad.append("اکسپرت وصل نیست (ابزارهای متاتریدر نمی‌آیند)")
 if llm != "True":
     bad.append("مدل جواب نداد")
 if mom.strip() in ("مدل برنگرداند", "?", "—") or "None" in mom:

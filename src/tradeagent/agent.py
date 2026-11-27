@@ -58,7 +58,9 @@ DEFAULT_ALLOW = [
     "journal_add",
 ]
 
-CONTRACT = """You are the trading agent of tradeAgent. Reply with ONE JSON object only:
+CONTRACT = """همهٔ متن‌های انسانی (analysis و reason) را فارسی بنویس؛ پاسخ انگلیسی قبول نیست.
+
+You are the trading agent of tradeAgent. Reply with ONE JSON object only:
 
 {
   "analysis": "<2-4 sentences in Persian: what the data says right now>",
@@ -324,14 +326,27 @@ class ToolAgent:
 
         started = time.time()
         try:
-            result = self.mcp.call_tool(name, args)
+            try:
+                result = self.mcp.call_tool(name, args)
+            except Exception as first_exc:  # noqa: BLE001
+                # پل متاتریدر گاهی همان لحظه قطع/وصل می‌شود؛ یک بار دیگر
+                import time as _t
+
+                _t.sleep(1.5)
+                try:
+                    result = self.mcp.call_tool(name, args)
+                except Exception:
+                    raise first_exc
+            note = self._scale_note(result)
+            if time.time() - started > 1.4:
+                note = (note + " · " if note else "") + "پل اول قطع بود، دوباره امتحان شد"
             return ToolCallRecord(
                 tool=name,
                 arguments=args,
                 ok=True,
                 result=result,
                 elapsed_ms=int((time.time() - started) * 1000),
-                note=self._scale_note(result),
+                note=note,
             )
         except Exception as exc:  # noqa: BLE001
             return ToolCallRecord(
