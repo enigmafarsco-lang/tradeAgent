@@ -178,8 +178,21 @@ if [[ "$MODE" == "verify" ]]; then
   done
   rm -f var/loop.lock
 
-  # سرویس خوابیده، پس اکسپرت باید دوباره به پلِ همین پروسه وصل شود (تا ۷۵ ثانیه)
-  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm --wait-ea 75 > /tmp/tradeagent-verify.json 2>&1
+  # پلِ جاماندهٔ سرویس را ببند، وگرنه اکسپرت به آن وصل می‌ماند و پرسش‌های ما بی‌جواب می‌مانند
+  "$PY" - <<'PY'
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.getcwd(), "src"))
+from tradeagent.diag import kill_stale_bridges  # noqa: E402
+
+info = kill_stale_bridges()
+print(f"[gold] پل قبلی: {len(info['killed'])} پروسه بسته شد، پورت آزاد={info['port_free']} ({info['waited_s']}s)")
+PY
+
+  # سرویس خوابیده، پس اکسپرت باید دوباره به پلِ همین پروسه وصل شود (تا ۹۰ ثانیه)
+  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm --wait-ea 90 > /tmp/tradeagent-verify.json 2>&1
   "$PY" - <<'PY'
 import json, os, pathlib
 

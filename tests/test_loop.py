@@ -528,7 +528,7 @@ def test_verify_waits_for_the_expert_before_running(cfg: Config) -> None:
 
     root = Path(__file__).resolve().parents[1]
     body = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
-    assert "--wait-ea 75" in body
+    assert "--wait-ea 90" in body
     assert "اتصال اکسپرت:" in body
     cli = (root / "src/tradeagent/cli.py").read_text(encoding="utf-8")
     assert '"--wait-ea"' in cli
@@ -562,3 +562,21 @@ def test_verify_json_is_found_after_the_logs() -> None:
     start = start + 1 if start >= 0 else raw.find("{")
     data = json.loads(raw[start:])
     assert data["cycle"] == 5
+
+
+def test_verify_closes_the_service_leftover_bridge_first() -> None:
+    """اکسپرت به پلِ جامانده وصل می‌ماند؛ چرخه باید اول آن را ببندد."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert "kill_stale_bridges" in body
+    assert "--wait-ea 90" in body
+    assert body.index("kill_stale_bridges") < body.index("--wait-ea 90")
+
+
+def test_bridge_processes_are_found_by_cmdline(tmp_path) -> None:
+    from tradeagent.diag import bridge_pids
+
+    for pid, cmd in bridge_pids():
+        assert cmd
+        assert "trade-mcp" in cmd

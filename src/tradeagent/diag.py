@@ -454,6 +454,62 @@ def mt5_wine_log(lines: int = 4) -> list[str]:
     return [ln for ln in raw if ln.strip()][-lines:]
 
 
+def bridge_pids() -> list[tuple[str, str]]:
+    """پروسه‌های trade-mcp (پل) که همین حالا زنده‌اند: (pid, cmdline)."""
+    out: list[tuple[str, str]] = []
+    me = str(os.getpid())
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or entry.name == me:
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        cmd = " ".join(a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a).strip()
+        if not cmd:
+            continue
+        if "trade-mcp" in cmd and "serve" in cmd:
+            out.append((entry.name, cmd[:140]))
+    return out
+
+
+def port_free(port: int = 8787, host: str = "127.0.0.1") -> bool:
+    """آیا می‌شود روی این پورت گوش داد؟ (یعنی پل قبلی رفته)"""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def kill_stale_bridges(port: int = 8787, wait_s: float = 8.0) -> dict[str, Any]:
+    """پلِ جاماندهٔ سرویسِ خوابیده را ببند.
+
+    اگر نسخهٔ قبلی زنده بماند، اکسپرت به همان وصل می‌شود و پرسش‌های ما به سرورِ تازه
+    می‌رسد — نتیجه: «MCP server did not answer in time» در حالی که لاگ می‌گوید connected.
+    """
+    victims = bridge_pids()
+    for pid, _ in victims:
+        try:
+            os.kill(int(pid), 15)
+        except (OSError, ValueError):
+            continue
+    started = time.time()
+    while time.time() - started < wait_s:
+        if port_free(port):
+            return {"killed": [p for p, _ in victims], "port_free": True,
+                    "waited_s": round(time.time() - started, 1)}
+        time.sleep(0.4)
+    return {"killed": [p for p, _ in victims], "port_free": port_free(port),
+            "waited_s": round(time.time() - started, 1)}
+
+
 def bridge_state(path: Path | None = None) -> dict[str, Any]:
     """وضعیت پل همان‌طور که سرویس روی دیسک نوشته است."""
     for candidate in (path, Path("var/mcp_status.json"), Path("var") / "state" / "mcp_status.json"):
