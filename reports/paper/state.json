@@ -1,38 +1,38 @@
 {
   "schema": 1,
-  "updated_ts": "2026-11-27T09:42:05Z",
-  "cycle": 94,
-  "balance": 9678.1055,
-  "equity": 9668.7389,
+  "updated_ts": "2026-11-27T09:47:02Z",
+  "cycle": 95,
+  "balance": 9658.3456,
+  "equity": 9653.3176,
   "peak_equity": 10000.0,
-  "drawdown_pct": 3.313,
+  "drawdown_pct": 3.467,
   "starting_balance": 10000.0,
-  "streak_wins": 0,
-  "streak_losses": 2,
-  "open_positions": 4,
+  "streak_wins": 1,
+  "streak_losses": 0,
+  "open_positions": 2,
   "overall_stats": {
-    "trades": 11,
-    "wins": 1,
-    "losses": 10,
-    "win_rate": 9.09,
-    "net_pnl": -307.6792,
-    "avg_bps": -5.289,
-    "avg_r": -0.567
+    "trades": 13,
+    "wins": 2,
+    "losses": 11,
+    "win_rate": 15.38,
+    "net_pnl": -327.4391,
+    "avg_bps": -4.75,
+    "avg_r": -0.51
   },
   "today_stats": {
-    "trades": 11,
-    "wins": 1,
-    "losses": 10,
-    "win_rate": 9.09,
-    "net_pnl": -307.6792,
-    "avg_bps": -5.289,
-    "avg_r": -0.567
+    "trades": 13,
+    "wins": 2,
+    "losses": 11,
+    "win_rate": 15.38,
+    "net_pnl": -327.4391,
+    "avg_bps": -4.75,
+    "avg_r": -0.51
   },
   "policy": {
     "variant": "momentum",
-    "level": 0,
-    "version": 1,
-    "source": "baseline"
+    "level": 1,
+    "version": 2,
+    "source": "adaptive"
   },
   "day": "2026-11-27"
 }

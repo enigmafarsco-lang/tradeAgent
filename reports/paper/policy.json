@@ -3,21 +3,21 @@
     "variant": "momentum",
     "params": {
       "lookback_s": 300,
-      "breakout_k": 1.0,
+      "breakout_k": 1.25,
       "sl_atr": 1.3,
       "rr": 1.6,
       "hold_s": 900,
-      "min_edge_bps": 2.0,
+      "min_edge_bps": 3.0,
       "max_spread_bps": 6.0,
       "cooldown_s": 300,
       "z_entry": 1.8,
       "max_vol_bps": 90.0
     },
-    "level": 0,
-    "generation": 0,
-    "version": 1,
-    "source": "baseline",
-    "reason": "",
+    "level": 1,
+    "generation": 1,
+    "version": 2,
+    "source": "adaptive",
+    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑)",
     "risk_scale": 1.0
   },
   "next": {
@@ -41,5 +41,5 @@
     "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑)",
     "risk_scale": 1.0
   },
-  "ts": "2026-11-27T09:42:05Z"
+  "ts": "2026-11-27T09:47:02Z"
 }
