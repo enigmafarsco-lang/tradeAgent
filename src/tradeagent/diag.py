@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -211,30 +212,54 @@ def mt5_pids(proc_root: Path = Path("/proc")) -> list[str]:
     return sorted(pids, key=int)
 
 
+def harvester_status(dir_path: Path) -> dict[str, Any]:
+    """status.json خودِ اکسپرت: چند نماد، چند تیک، چند خطا."""
+    path = dir_path / "status.json"
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return {"broken": True}
+    symbols = data.get("symbols") or []
+    return {
+        "ea": data.get("ea"),
+        "version": data.get("version"),
+        "updated": data.get("updated_ts"),
+        "polls": data.get("polls"),
+        "total_ticks": data.get("total_ticks"),
+        "errors": data.get("total_errors"),
+        "symbols": [
+            {"symbol": s.get("symbol"), "ticks": s.get("ticks"), "age_s": s.get("age_s")}
+            for s in symbols
+        ],
+    }
+
+
 def harvester() -> dict[str, Any]:
-    """آیا اکسپرت هاروستر تیک تازه می‌نویسد؟ (bars=0 معمولاً یعنی نه)"""
+    """آیا اکسپرت هاروستر تیک تازه می‌نویسد؟ (bars=0 معمولاً یعنی نه)
+
+    چیدمان خودِ اکسپرت: harvester/ticks/<SYMBOL>/<YYYYMMDD>.csv
+    """
     root = prefix()
     dirs = [d for d in root.glob("**/MQL5/Files/harvester") if d.is_dir()]
     if not dirs:
         return {"found": False}
     d = max(dirs, key=lambda x: x.stat().st_mtime)
-    ticks = [f for f in (d / "ticks").glob("*") if f.is_file()]
-    bars = [f for f in (d / "bars").glob("*") if f.is_file()]
-    newest = max(ticks, key=lambda f: f.stat().st_mtime) if ticks else None
+    files = [f for f in d.glob("ticks/**/*.csv") if f.is_file()]
+    newest = max(files, key=lambda f: f.stat().st_mtime) if files else None
     age = int(time.time() - newest.stat().st_mtime) if newest else None
     return {
         "found": True,
         "dir": str(d),
-        "ticks": len(ticks),
-        "bars": len(bars),
+        "ticks": len(files),
         "newest": newest.name if newest else None,
+        "newest_parent": newest.parent.name if newest else None,
         "age_s": age,
         "size": newest.stat().st_size if newest else 0,
+        "status": harvester_status(d),
     }
-
-
-def oldest_name(path: Path) -> str:
-    return path.name
 
 
 HARVESTER_SYMBOL = re.compile(r"expert\s+(\w*Harvester)\s+\(([A-Za-z0-9_.\-]+),")
@@ -329,9 +354,18 @@ def report() -> None:
     h = harvester()
     if h.get("found"):
         print(
-            f"  هاروستر: ticks={h.get('ticks')} bars={h.get('bars')} · "
-            f"تازه‌ترین تیک {h.get('newest')} · {h.get('age_s')}s پیش"
+            f"  هاروستر: csv={h.get('ticks')} · تازه‌ترین "
+            f"{h.get('newest_parent') or '-'}/{h.get('newest') or '-'} · {h.get('age_s')}s پیش"
         )
+        st = h.get("status") or {}
+        if st:
+            syms = ", ".join(
+                f"{x['symbol']}({x['ticks']}t,{x['age_s']}s)" for x in st.get("symbols") or []
+            )
+            print(
+                f"    status.json: polls={st.get('polls')} total_ticks={st.get('total_ticks')}"
+                f" errors={st.get('errors')} · نمادها: {syms or '— هیچ نمادی انتخاب نشده —'}"
+            )
         sym = harvester_symbol()
         if sym and not sym[1].startswith("XAUUSD"):
             print(f"  ! اکسپرت {sym[0]} روی چارت «{sym[1]}» است، نه XAUUSD_i → تیک طلا نمی‌آید")

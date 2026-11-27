@@ -274,15 +274,23 @@ def test_diag_reports_harvester_freshness(tmp_path, monkeypatch) -> None:
     from tradeagent.diag import harvester
 
     monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
-    ticks = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Files" / "harvester" / "ticks"
-    ticks.mkdir(parents=True)
-    (ticks / "XAUUSD_i-20261127.csv").write_text("t,bid,ask\n", encoding="utf-8")
+    harv = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Files" / "harvester"
+    sym = harv / "ticks" / "XAUUSD_i"
+    sym.mkdir(parents=True)
+    (sym / "20261127.csv").write_text("t,bid,ask\n", encoding="utf-8")
+    (harv / "status.json").write_text(
+        '{"ea":"TickHarvester","polls":7,"total_ticks":42,"total_errors":0,'
+        '"symbols":[{"symbol":"XAUUSD_i","ticks":42,"age_s":2}]}',
+        encoding="utf-8",
+    )
 
     info = harvester()
     assert info["found"] is True
-    assert info["ticks"] == 1
-    assert info["newest"].startswith("XAUUSD_i")
+    assert info["ticks"] == 1  # چیدمان اکسپرت: ticks/<SYMBOL>/<day>.csv
+    assert info["newest"] == "20261127.csv"
+    assert info["newest_parent"] == "XAUUSD_i"
     assert isinstance(info["age_s"], int)
+    assert info["status"]["symbols"][0]["symbol"] == "XAUUSD_i"
 
 
 def test_mt5_pids_ignores_shells_that_mention_the_name() -> None:
