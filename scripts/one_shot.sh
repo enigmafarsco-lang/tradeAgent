@@ -136,12 +136,14 @@ try:
     if rows:
         win = agg["w"] or 0
         print(f"معاملات: {agg['n']} بسته‌شده · برنده {win} ({100.0 * win / max(1, agg['n']):.0f}%)")
-        print(
-            "  آخرین‌ها: "
-            + " ، ".join(
-                f"{r['variant']}/{r['exit_reason']} {r['pnl_bps']:+.1f}bp" for r in rows[:3]
-            )
-        )
+        groups = db.execute(
+            "SELECT variant, exit_reason, COUNT(*) n, ROUND(AVG(pnl_bps),2) avg_bp,"
+            " ROUND(SUM(pnl_bps),1) sum_bp FROM trades GROUP BY variant, exit_reason"
+            " ORDER BY variant, exit_reason"
+        ).fetchall()
+        print("  تفکیک: " + " | ".join(
+            f"{g['variant']}/{g['exit_reason']} n={g['n']} avg={g['avg_bp']}bp" for g in groups
+        ))
 except Exception as exc:  # noqa: BLE001
     print(f"معاملات: خوانده نشد ({type(exc).__name__})")
 

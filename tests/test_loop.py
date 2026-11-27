@@ -602,3 +602,12 @@ def test_with_mcp_off_the_agent_uses_only_local_tools(cfg: Config, tmp_path) -> 
 
     body = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert 'USE_MCP=' in body and 'WAIT_EA=0' in body
+
+
+def test_one_shot_breaks_the_trades_down_by_reason() -> None:
+    """۲۲٪ برد یعنی چه؟ باید بدانیم خروج‌ها با time است یا sl/tp."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "one_shot.sh").read_text(encoding="utf-8")
+    assert "GROUP BY variant, exit_reason" in body
+    assert "تفکیک" in body
