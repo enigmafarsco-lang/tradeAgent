@@ -29,17 +29,17 @@
       "rr": 1.6,
       "hold_s": 900,
       "min_edge_bps": 3.0,
-      "max_spread_bps": 4.5,
-      "cooldown_s": 450,
+      "max_spread_bps": 6.0,
+      "cooldown_s": 300,
       "z_entry": 1.8,
       "max_vol_bps": 90.0
     },
-    "level": 2,
-    "generation": 11,
-    "version": 12,
+    "level": 1,
+    "generation": 12,
+    "version": 13,
     "source": "adaptive",
-    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑) • فیلتر هزینه سخت‌تر (سقف اسپرد ↓، فاصله بین ورودها ↑)",
+    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑)",
     "risk_scale": 1.0
   },
-  "ts": "2026-11-27T15:25:50Z"
+  "ts": "2026-11-27T15:40:14Z"
 }
