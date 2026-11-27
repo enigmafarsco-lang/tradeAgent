@@ -223,12 +223,46 @@ def oldest_name(path: Path) -> str:
     return path.name
 
 
+def journal_tail(lines: int = 3) -> list[str]:
+    """آخرین خطوط Journal ترمینال (نه Experts) — برای دیدن دلیل بسته شدن."""
+    root = prefix()
+    files = [
+        f
+        for pat in (
+            "Program Files/MetaTrader 5/logs/*.log",
+            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
+        )
+        for f in root.glob(pat)
+    ]
+    if not files:
+        return []
+    newest = max(files, key=lambda f: f.stat().st_mtime)
+    body = read_log(newest)
+    return [ln for ln in body if ln.strip()][-lines:]
+
+
+def mt5_wine_log(lines: int = 4) -> list[str]:
+    """خروجی wine که start_mt5.sh ذخیره کرده (کرش/خطا)."""
+    path = Path("var/logs/mt5.log")
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return [ln for ln in raw if ln.strip()][-lines:]
+
+
 def report() -> None:
     """بلوک خوانا برای `run_gold.sh --status`."""
     pids = mt5_pids()
     print(f"  terminal64.exe: {('running (pid ' + ', '.join(pids[:2]) + ')') if pids else 'NOT running - متاتریدر باز نیست'}")
     if not pids:
         print("    برای باز کردنِ مستقل از ترمینال: ./scripts/start_mt5.sh")
+        for ln in journal_tail(2):
+            print(f"    Journal آخر: {ln[:140]}")
+        for ln in mt5_wine_log(3):
+            print(f"    wine: {ln[:140]}")
     info = ea_log()
     if not info.get("found"):
         print(f"  Experts log: هیچ *.log زیر {prefix()} پیدا نشد")

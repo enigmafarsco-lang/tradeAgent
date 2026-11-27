@@ -628,3 +628,10 @@ Tools -> Options -> Expert Advisors
 `setsid` بلافاصله در شل «done» چاپ می‌کند؛ این طبیعی است (فرزند در session جدا ادامه
 می‌دهد). تأیید واقعی: `./scripts/run_gold.sh --status` → خط `terminal64.exe: running (pid …)`
 و `هاروستر: … · Xs پیش`.
+
+## دلیل بسته شدن متاتریدر کجاست
+
+`./scripts/start_mt5.sh` دیگر خروجی wine را دور نمی‌ریزد؛ در `var/logs/mt5.log` ذخیره می‌کند.
+اگر ترمینال بسته شد، `./scripts/run_gold.sh --status` همان‌جا دو خط آخر Journal و سه خط آخر
+wine را چاپ می‌کند. کرش‌های WebView2 (پنل Community/News) و کمبود حافظه شایع‌ترین‌اند:
+بستن پنل‌های Community/News در متاتریدر معمولاً بس است.

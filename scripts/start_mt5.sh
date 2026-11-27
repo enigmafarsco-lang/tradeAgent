@@ -41,8 +41,11 @@ fi
 [[ -f "$EXE" ]] || { bad "پیدا نشد: $EXE"; bad "با MT5_WINEPREFIX مسیر prefix را بده."; exit 1; }
 command -v wine >/dev/null 2>&1 || { bad "wine روی PATH نیست"; exit 1; }
 
-dim "اجرا با setsid (مستقل از این ترمینال)"
-setsid env WINEPREFIX="$PREFIX" wine "$EXE" >/dev/null 2>&1 < /dev/null &
+mkdir -p var/logs
+LOG="$ROOT/var/logs/mt5.log"
+dim "اجرا با setsid (مستقل از این ترمینال)؛ خروجی wine → $LOG"
+: > "$LOG"
+setsid env WINEPREFIX="$PREFIX" wine "$EXE" >>"$LOG" 2>&1 < /dev/null &
 disown 2>/dev/null || true
 
 for i in $(seq 1 30); do

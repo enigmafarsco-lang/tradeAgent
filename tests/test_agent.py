@@ -295,3 +295,23 @@ def test_start_mt5_script_detaches_from_the_terminal() -> None:
     assert "setsid" in body and "disown" in body
     assert "--check" in body
     assert "from tradeagent.diag import mt5_pids" in body
+
+
+def test_mt5_crash_output_is_kept(tmp_path, monkeypatch) -> None:
+    """خروجی wine نباید دور ریخته شود؛ دلیل بسته شدن متاتریدر همان‌جاست."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    body = (root / "scripts" / "start_mt5.sh").read_text(encoding="utf-8")
+    assert "var/logs/mt5.log" in body
+    assert '>>"$LOG" 2>&1' in body
+
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "var" / "logs").mkdir(parents=True)
+    (tmp_path / "var" / "logs" / "mt5.log").write_text("err: crash\n", encoding="utf-8")
+    from tradeagent.diag import mt5_wine_log
+
+    assert mt5_wine_log() == ["err: crash"]
+    assert os.getcwd() == str(tmp_path)
