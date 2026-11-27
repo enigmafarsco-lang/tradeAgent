@@ -452,3 +452,22 @@ def test_model_context_names_the_only_instrument(cfg: Config) -> None:
     ctx = runner.build_llm_context(result, runner.current_policy())
     assert ctx["only_trade_this_symbol"] == cfg.symbols[0]
     assert ctx["only_trade_this_symbol"] in ctx["symbols"]
+
+
+def test_one_shot_script_prints_one_block_and_restores_the_service() -> None:
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "one_shot.sh").read_text(encoding="utf-8")
+    assert "run_gold.sh\" --verify" in body
+    assert "VERIFY_QUIET=1" in body
+    assert "نتیجه:" in body and "خلاصه" in body
+    # نباید خودش سرویس را دستکاری کند؛ run_gold --verify این کار را می‌کند
+    assert "systemctl" not in body
+
+
+def test_verify_quiet_hides_the_tool_table() -> None:
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert "VERIFY_QUIET" in body
+    assert 'ابزارها: {len(calls) - len(bad)}/{len(calls)} موفق' in body

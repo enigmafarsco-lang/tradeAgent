@@ -163,6 +163,8 @@ ensure_env() {
 }
 
 if [[ "$MODE" == "verify" ]]; then
+  QUIET=0
+  [[ "${VERIFY_QUIET:-0}" == "1" ]] && QUIET=1
   step "یک چرخهٔ واقعی، همین حالا"
   WAS_ACTIVE=0
   systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 && WAS_ACTIVE=1
@@ -202,9 +204,15 @@ print(f"  سیاست: {data.get('policy')}")
 if agent:
     print(f"  ایجنت: rounds={agent.get('rounds')} repairs={agent.get('repairs')} "
           f"error={agent.get('error') or '-'}")
-    for call in (agent.get("calls") or []):
-        print(f"    {call.get('tool'):<18} ok={call.get('ok')} {call.get('elapsed_ms')}ms "
-              f"{(str(call.get('error'))[:70]) if not call.get('ok') else ''}")
+    calls = agent.get("calls") or []
+    if QUIET:
+        bad = [c for c in calls if not c.get("ok")]
+        print(f"  ابزارها: {len(calls) - len(bad)}/{len(calls)} موفق" +
+              (" | " + "; ".join(f"{c.get('tool')}: {str(c.get('error'))[:60]}" for c in bad[:3]) if bad else ""))
+    else:
+        for call in calls:
+            print(f"    {call.get('tool'):<18} ok={call.get('ok')} {call.get('elapsed_ms')}ms "
+                  f"{(str(call.get('error'))[:70]) if not call.get('ok') else ''}")
     if agent.get("analysis"):
         print(f"  تحلیل: {str(agent.get('analysis'))[:220]}")
 else:
@@ -228,6 +236,7 @@ else:
         print(f"  آخرین پاسخ مدل (برای دیدن دلیل):\n    {raw_reply[-700:]}")
 PY
 
+  [[ "$QUIET" == "1" ]] && { if (( WAS_ACTIVE )); then systemctl --user start tradeagent-gold.service 2>/dev/null; fi; exit 0; }
   step "حکم مدل در گزارش"
   "$PY" - <<'PY'
 import pathlib, re
