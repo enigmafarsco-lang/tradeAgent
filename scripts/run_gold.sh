@@ -43,30 +43,38 @@ mt5_report() {
 import os, pathlib, subprocess, time
 
 prefix = pathlib.Path(os.environ["PREFIX"])
-logs = sorted((prefix / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs").glob("*.log"),
-              key=lambda f: f.stat().st_mtime)
+c = prefix / "drive_c"
+# سه جا ممکن است لاگ باشد: نصب پرتابل، Journal، و پروفایل AppData
+patterns = [
+    "Program Files/MetaTrader 5/MQL5/Logs/*.log",
+    "Program Files/MetaTrader 5/logs/*.log",
+    "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
+    "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
+]
+found = []
+for pat in patterns:
+    found.extend(c.glob(pat))
+default_dir = c / "Program Files" / "MetaTrader 5" / "MQL5" / "Files" / "harvester"
 
 try:
     out = subprocess.run(["pgrep", "-af", "terminal64.exe"], capture_output=True, text=True, timeout=5).stdout
     procs = [l for l in out.splitlines() if "pgrep" not in l]
 except (OSError, subprocess.SubprocessError):
     procs = []
-if procs:
-    print(f"  terminal64.exe: running ({procs[0][:80]})")
+print(f"  terminal64.exe: {('running (' + procs[0][:70] + ')') if procs else 'NOT running - متاتریدر باز نیست'}")
+
+if not found:
+    print(f"  Experts log: هیچ *.log زیر {c} پیدا نشد")
 else:
-    print("  terminal64.exe: NOT running - متاتریدر باز نیست")
-if not logs:
-    print(f"  Experts log: پیدا نشد زیر {prefix}/drive_c/.../MQL5/Logs")
-else:
-    f = logs[-1]
+    f = found[-1]
     age = int(time.time() - f.stat().st_mtime)
-    print(f"  Experts log: {f.name} (آخرین نوشتن {age}s پیش)")
+    print(f"  Experts log: {f.relative_to(c)} (آخرین نوشتن {age}s پیش)")
     lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
     keep = [l for l in lines if "trade-mcp" in l.lower() or "TradeMCPConnector" in l]
-    for l in (keep[-2:] if keep else lines[-2:]):
+    for l in (keep[-3:] if keep else lines[-2:]):
         print(f"    {l[:150]}")
     if not keep:
-        print("    (هیچ خط trade-mcp در این فایل نیست: اکسپرت اجرا نشده)")
+        print("    (هیچ خط trade-mcp نیست: اکسپرت روی هیچ چارتی اجرا نشده)")
 PY
 }
 

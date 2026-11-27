@@ -227,3 +227,14 @@ def test_run_gold_status_reports_mt5_itself() -> None:
     assert "mt5_report()" in body
     assert "terminal64.exe" in body and "NOT running" in body
     assert "Experts log" in body
+
+
+def test_mt5_logs_are_looked_for_in_both_layouts() -> None:
+    """نصب پرتابل در Program Files است، ولی نصب معمولی لاگ را در AppData می‌نویسد."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "scripts"
+    for name in ("run_gold.sh", "connect_trade_mcp.sh"):
+        body = (root / name).read_text(encoding="utf-8")
+        assert "AppData/Roaming/MetaQuotes/Terminal" in body, name
+        assert "Program Files/MetaTrader 5/MQL5/Logs/*.log" in body, name

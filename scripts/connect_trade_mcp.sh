@@ -45,8 +45,18 @@ SYMBOL = os.environ.get("SYMBOL", "XAUUSD_i")
 sys.path.insert(0, str(ROOT / "src"))
 
 PREFIX = pathlib.Path(os.environ.get("MT5_WINEPREFIX") or (pathlib.Path.home() / "Wine"))
+_C = PREFIX / "drive_c"
 EXPERT_LOGS = sorted(
-    (PREFIX / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs").glob("*.log"),
+    {
+        f
+        for pat in (
+            "Program Files/MetaTrader 5/MQL5/Logs/*.log",
+            "Program Files/MetaTrader 5/logs/*.log",
+            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
+            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
+        )
+        for f in _C.glob(pat)
+    },
     key=lambda f: f.stat().st_mtime,
 )
 STATUS_FILES = [p for p in [ROOT / "var" / "state" / "mcp_status.json", ROOT / "var" / "mcp_status.json"] if p.exists()]
