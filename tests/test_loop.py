@@ -520,3 +520,34 @@ def test_a_made_up_price_in_the_analysis_is_replaced_with_the_real_numbers(cfg: 
     ref = 3632.87
     bad = [n for n in _numbers_in("قیمت فعلی 1452.35، اسپرد 0.5") if n > 100 and abs(n - ref) / ref > 0.02]
     assert bad == [1452.35]
+
+
+def test_verify_waits_for_the_expert_before_running(cfg: Config) -> None:
+    """سرویس خوابیده و اکسپرت تا ۶۰ ثانیه بعد وصل می‌شود؛ چرخهٔ verify باید صبر کند."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    body = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert "--wait-ea 75" in body
+    assert "اتصال اکسپرت:" in body
+    cli = (root / "src/tradeagent/cli.py").read_text(encoding="utf-8")
+    assert '"--wait-ea"' in cli
+
+
+def test_wait_for_ea_returns_a_price_when_it_connects(cfg: Config) -> None:
+    runner = Runner(cfg)
+
+    class MCP:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def call_tool(self, name, args=None):  # noqa: ANN001
+            self.calls += 1
+            return {"symbol": "XAUUSD_i", "bid": 3632.87, "ask": 3633.27}
+
+    runner.mcp = MCP()
+    got = runner.wait_for_ea(timeout_s=1, step_s=0.1)
+    assert got["ok"] is True
+    assert 3630 < got["price"] < 3640

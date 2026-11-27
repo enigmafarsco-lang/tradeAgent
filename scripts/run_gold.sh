@@ -178,7 +178,8 @@ if [[ "$MODE" == "verify" ]]; then
   done
   rm -f var/loop.lock
 
-  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm > /tmp/tradeagent-verify.json 2>&1
+  # سرویس خوابیده، پس اکسپرت باید دوباره به پلِ همین پروسه وصل شود (تا ۷۵ ثانیه)
+  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm --wait-ea 75 > /tmp/tradeagent-verify.json 2>&1
   "$PY" - <<'PY'
 import json, os, pathlib
 
@@ -223,6 +224,10 @@ if act:
           f"notional={act.get('notional')} نگهداری={act.get('hold_s')}s" if act.get('action') == 'open'
           else f"| {act.get('reason') or ''}"))
 print(f"  پوزیشن باز: {data.get('open_positions')}")
+ea = data.get("ea_wait") or {}
+print("  اتصال اکسپرت: " + (
+    f"صلح شد در {ea.get('after_s')}s · قیمت MT5={ea.get('price')}" if ea.get("ok")
+    else f"وصل نشد ({ea.get('why')})"))
 mom = data.get("momentum") or {}
 if mom:
     print(f"  حکم تکانه: {mom.get('direction')}/{mom.get('phase')} "

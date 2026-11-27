@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_loop.add_argument("--interval", type=int, default=None, help="ثانیه بین چرخه‌ها (پیش‌فرض 300)")
     p_loop.add_argument("--once", action="store_true", help="فقط یک چرخه، بعد خروج (برای تست اتصال)")
     p_loop.add_argument("--llm", action="store_true", help="مدل را حتی بدون دادهٔ تازه صدا بزن")
+    p_loop.add_argument("--wait-ea", type=float, default=0, help="چند ثانیه برای وصل شدن اکسپرت صبر کن")
 
     p_demo = sub.add_parser("demo", help="اجرای نمونه با داده‌ی ساختگی، بدون متاتریدر")
     p_demo.add_argument("--cycles", type=int, default=6, help="تعداد چرخه")
@@ -125,7 +126,11 @@ def cmd_cycle(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_loop(cfg: Config, args: argparse.Namespace) -> int:
     runner = _runner(cfg)
     if getattr(args, "once", False):
-        result = runner.run_cycle(publish=True, force_llm=bool(getattr(args, "llm", False)))
+        result = runner.run_cycle(
+            publish=True,
+            force_llm=bool(getattr(args, "llm", False)),
+            wait_ea_s=float(getattr(args, "wait_ea", 0) or 0),
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     return runner.run_forever(args.interval)

@@ -136,6 +136,51 @@ class Runner:
         self.local_cycles = self.reports_dir / "cycles.jsonl"
         self._running = True
 
+    def wait_for_ea(self, timeout_s: float = 70.0, step_s: float = 4.0) -> dict[str, Any]:
+        """صبر کن تا اکسپرت به پلِ همین پروسه وصل شود.
+
+        سرویس که می‌خوابد، سوکت اکسپرت هم می‌بندد و تا ۶۰ ثانیه بعد دوباره وصل می‌شود؛
+        چرخهٔ --verify درست در همان شکاف می‌افتاد و همهٔ ابزارهای متاتریدر خطا می‌دادند.
+        """
+        if self.mcp is None or not getattr(self.mcp, "enabled", False):
+            return {"ok": False, "why": "پل MCP خاموش است"}
+        started = time.time()
+        last = ""
+        while time.time() - started < timeout_s:
+            for tool in ("mt5_status", "account_info"):
+                try:
+                    res = self.mcp.call_tool(tool)
+                except Exception as exc:  # noqa: BLE001
+                    last = f"{type(exc).__name__}: {exc}"
+                    continue
+                if isinstance(res, dict) and res:
+                    return {
+                        "ok": True,
+                        "tool": tool,
+                        "after_s": round(time.time() - started, 1),
+                        "price": self._ea_price(res),
+                    }
+            time.sleep(step_s)
+        return {"ok": False, "why": last or "اکسپرت تا پایان مهلت وصل نشد"}
+
+    def _ea_price(self, first: Any = None) -> float:
+        """قیمت همان نماد از متاتریدر (برای هم‌مقیاس‌سنجی؛ اختیاری)."""
+        from .agent import _dig_price_local
+
+        symbol = (self.cfg.symbols or [""])[0]
+        price = _dig_price_local(first) if first is not None else 0.0
+        if price:
+            return price
+        for tool, args in (("market_snapshot", {"symbol": symbol}), ("get_candles", {"symbol": symbol, "timeframe": "M1", "count": 1})):
+            try:
+                res = self.mcp.call_tool(tool, args)
+            except Exception:  # noqa: BLE001
+                continue
+            price = _dig_price_local(res)
+            if price:
+                return price
+        return 0.0
+
     def _reference_price(self) -> float:
         """قیمت مرجع برای هم‌مقیاس‌سنجی نتایج ابزار: آخرین کندلِ نماد معاملاتی."""
         symbol = (self.cfg.symbols or [""])[0]
@@ -407,8 +452,13 @@ class Runner:
         force_llm: bool = False,
         publish: bool = True,
         dry_run_publish: bool = False,
+        wait_ea_s: float = 0.0,
     ) -> dict[str, Any]:
         now_ts = int(now_ts or time.time())
+        ea_wait: dict[str, Any] | None = None
+        if wait_ea_s > 0:
+            ea_wait = self.wait_for_ea(wait_ea_s)
+            LOG.info("انتظار اکسپرت: %s", ea_wait)
         cycle = self.store.next_cycle_index()
         policy_in = self.current_policy()
         prev_policy = json.loads(json.dumps(policy_in))
@@ -690,6 +740,7 @@ class Runner:
             "cycle": cycle,
             "agent": result.extra.get("agent"),
             "momentum": result.extra.get("momentum"),
+            "ea_wait": ea_wait,
             "agent_action": result.extra.get("agent_action"),
             # بعد از حکم مدل هم ممکن است پوزیشن باز شده باشد؛ از دیسک بخوان
             "open_positions": len(self.store.load_positions()),

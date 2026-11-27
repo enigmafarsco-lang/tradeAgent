@@ -19,7 +19,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 "$ROOT/scripts/start_mt5.sh" >"$TMP/mt5.log" 2>&1 || true
 MT5_WINEPREFIX="${MT5_WINEPREFIX:-$HOME/Wine}" "$PY" -c 'from tradeagent.diag import report; report()' >"$TMP/diag.log" 2>&1 || true
-"$PY" -c 'from tradeagent.diag import last_tick_price, mt5_price; import json; print(json.dumps({"ours": last_tick_price(), "theirs": mt5_price()}))' >"$TMP/price.json" 2>&1 || true
+"$PY" -c 'from tradeagent.diag import last_tick_price; import json; print(json.dumps({"ours": last_tick_price()}))' >"$TMP/price.json" 2>&1 || true
 VERIFY_QUIET=1 "$ROOT/scripts/run_gold.sh" --verify >"$TMP/verify.log" 2>&1 || true
 
 "$PY" - "$TMP" <<'PY'
@@ -46,6 +46,13 @@ tools = grab(r"ابزارها: (.+)", verify, "—")
 action = grab(r"اقدام: (.+)", verify, "—")
 mom = grab(r"حکم تکانه: (.+)", verify)
 analysis = grab(r"تحلیل: (.{0,120})", verify)
+ea_line = grab(r"اتصال اکسپرت: (.+)", verify, "—")
+ea_ok = "صلح شد" in ea_line
+ea_why = ea_line
+ea_price = 0.0
+_m = re.search(r"قیمت MT5=([\d.]+)", ea_line)
+if _m:
+    ea_price = float(_m.group(1))
 error = grab(r"ایجنت: .*?error=(.+)", verify, "-")
 
 price_text = (tmp / "price.json").read_text(encoding="utf-8", errors="replace")
@@ -62,7 +69,7 @@ except ValueError:
 
 def price_line() -> str:
     ours = price.get("ours") or {}
-    theirs = price.get("theirs") or {}
+    theirs = {"ok": ea_ok, "price": ea_price} if ea_ok else {"ok": False, "why": ea_why}
     if not ours.get("ok"):
         return f"قیمت تیک ما: — ({ours.get('why')})"
     base = f"قیمت تیک ما: {ours.get('bid')}/{ours.get('ask')}"
@@ -96,6 +103,7 @@ else:
 ea = next((ln.strip() for ln in diag.splitlines() if "trade-mcp]" in ln), "")
 if ea:
     print(f"آخرین خط اکسپرت: {ea[:110]}")
+print(f"اتصال اکسپرت در این چرخه: {ea_line}")
 print(f"تیک XAUUSD_i: {ticks} فایل، آخرین {age} ثانیه پیش")
 print(price_line())
 print(f"چرخه {cycle} | bars={bars} | llm={llm} | equity={equity}")
