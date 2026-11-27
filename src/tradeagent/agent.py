@@ -108,6 +108,7 @@ class ToolCallRecord:
     result: Any = None
     error: str = ""
     elapsed_ms: int = 0
+    note: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +117,7 @@ class ToolCallRecord:
             "ok": self.ok,
             "error": self.error,
             "elapsed_ms": self.elapsed_ms,
+            "note": self.note,
         }
 
 
@@ -178,6 +180,26 @@ def parse_agent_reply(text: str) -> dict[str, Any]:
     return {}
 
 
+def _dig_price_local(node: Any, depth: int = 0) -> float:
+    if depth > 4:
+        return 0.0
+    if isinstance(node, dict):
+        for key in ("bid", "ask", "last", "price", "close", "mark"):
+            value = node.get(key)
+            if isinstance(value, (int, float)) and float(value) > 100:
+                return float(value)
+        for value in node.values():
+            found = _dig_price_local(value, depth + 1)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in reversed(node[-3:]):
+            found = _dig_price_local(value, depth + 1)
+            if found:
+                return found
+    return 0.0
+
+
 def is_allowed_tool(name: str, allow: Sequence[str] | None, blocked: set[str]) -> bool:
     """ابزار خواندنی آزاد است، ابزار دستوری نه.
 
@@ -205,7 +227,9 @@ class ToolAgent:
         max_calls: int = 6,
         blocked: set[str] | None = None,
         local_tools: dict[str, Callable[..., Any]] | None = None,
+        price_ref: Callable[[], float] | None = None,
     ) -> None:
+        self.price_ref = price_ref
         self.chat = chat
         self.mcp = mcp
         # ابزارهای محلی: از تیک‌های خودمان، بدون نیاز به متاتریدر/MCP
@@ -307,6 +331,7 @@ class ToolAgent:
                 ok=True,
                 result=result,
                 elapsed_ms=int((time.time() - started) * 1000),
+                note=self._scale_note(result),
             )
         except Exception as exc:  # noqa: BLE001
             return ToolCallRecord(
@@ -316,6 +341,26 @@ class ToolAgent:
                 error=f"{type(exc).__name__}: {exc}",
                 elapsed_ms=int((time.time() - started) * 1000),
             )
+
+    def _scale_note(self, result: Any) -> str:
+        """اگر قیمتِ برگشتی با نمادِ معاملاتی هم‌مقیاس نبود، به مدل بگو."""
+        if self.price_ref is None:
+            return ""
+        try:
+            ref = float(self.price_ref() or 0.0)
+        except Exception:  # noqa: BLE001
+            return ""
+        if ref <= 0:
+            return ""
+        price = _dig_price_local(result)
+        if price <= 0:
+            return ""
+        if abs(price - ref) / ref > 0.05:
+            return (
+                f"این ابزار قیمت {price} را داد که با قیمت نماد معاملاتی ({ref}) هم‌مقیاس نیست؛ "
+                "احتمالاً نماد دیگری است — از این عدد استفاده نکن"
+            )
+        return ""
 
     # -- اجرا -----------------------------------------------------------
     def run(self, context: dict[str, Any], skill_text: str = "") -> AgentTrace:
@@ -453,6 +498,7 @@ class ToolAgent:
                                 "tool": r.tool,
                                 "ok": r.ok,
                                 "result": r.result if r.ok else r.error,
+                                **({"note": r.note} if r.note else {}),
                             }
                             for r in records
                         ],

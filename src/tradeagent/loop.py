@@ -109,6 +109,7 @@ class Runner:
                 allow=list(allow) if isinstance(allow, list) else None,
                 max_rounds=int(cfg.get("agent.max_rounds", 3)),
                 max_calls=int(cfg.get("agent.max_calls", 6)),
+                price_ref=self._reference_price,
             )
             LOG.info(
                 "ایجنت ابزاردار فعال شد: %s (%d ابزار)",
@@ -121,6 +122,15 @@ class Runner:
         self.publisher = Publisher(cfg, cfg.root)
         self.local_cycles = self.reports_dir / "cycles.jsonl"
         self._running = True
+
+    def _reference_price(self) -> float:
+        """قیمت مرجع برای هم‌مقیاس‌سنجی نتایج ابزار: آخرین کندلِ نماد معاملاتی."""
+        symbol = (self.cfg.symbols or [""])[0]
+        try:
+            bars = self.store.recent_bars(symbol, 1)
+        except Exception:  # noqa: BLE001
+            return 0.0
+        return float(bars[-1].close) if bars else 0.0
 
     # -- منبع ----------------------------------------------------------
     def build_source(self) -> HarvesterSource | SyntheticSource:

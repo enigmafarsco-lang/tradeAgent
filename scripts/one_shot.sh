@@ -87,7 +87,9 @@ ticks, age = tick_line(diag)
 print()
 print("────────── خلاصه ──────────")
 if bridge == "?":
-    hint = next((ln.strip() for ln in diag.splitlines() if "پل" in ln or "bridge" in ln), "")
+    hint = next((ln.strip() for ln in diag.splitlines() if "bridge" in ln), "")
+    if not hint:
+        hint = next((ln.strip() for ln in diag.splitlines() if ln.strip()), "")
     print(f"متاتریدر: {mt5} | پل: ؟ | {hint[:90]}")
 else:
     print(f"متاتریدر: {mt5} | پل: {bridge}")

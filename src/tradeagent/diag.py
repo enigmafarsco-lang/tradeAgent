@@ -391,13 +391,14 @@ def last_tick_price(root: Path | None = None, symbol: str = "XAUUSD_i") -> dict[
     return {"ok": False, "why": "خط تیکِ خوانا در انتهای فایل نبود"}
 
 
-def mt5_price(symbol: str = "XAUUSD_i") -> dict[str, Any]:
+def mt5_price(symbol: str = "XAUUSD_i", cfg: Any = None) -> dict[str, Any]:
     """قیمت همان نماد از خود متاتریدر (از راه پل MCP)."""
     try:
         from .config import Config
         from .mcp_client import mcp_from_config
 
-        cfg = Config.load("configs/gold.toml") if Path("configs/gold.toml").exists() else Config.load()
+        if cfg is None:
+            cfg = Config.load("configs/gold.toml") if Path("configs/gold.toml").exists() else Config.load()
         mcp = mcp_from_config(cfg)
         if not mcp.enabled or not mcp.start():
             return {"ok": False, "why": "پل MCP بالا نیامد"}
@@ -414,7 +415,7 @@ def mt5_price(symbol: str = "XAUUSD_i") -> dict[str, Any]:
                 if price:
                     return {"ok": True, "tool": tool, "price": price}
         finally:
-            mcp.stop()
+            mcp.close()
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
     return {"ok": False, "why": "هیچ ابزاری قیمت نداد"}

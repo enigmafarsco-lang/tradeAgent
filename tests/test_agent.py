@@ -457,3 +457,44 @@ def test_english_analysis_gets_one_persian_reminder() -> None:
     assert len(seen) >= 2
     assert "Persian" in seen[1][-1]["content"]
     assert trace.analysis.startswith("قیمت")
+
+
+def test_tool_result_from_another_instrument_is_flagged() -> None:
+    """ابزاری که با «XAUUSD» قیمت ۱۸۳۹ می‌دهد نباید نظر مدل را عوض کند."""
+    replies = [
+        json.dumps(
+            {
+                "analysis": "تحلیل",
+                "tool_calls": [{"tool": "market_snapshot", "arguments": {"symbol": "XAUUSD"}}],
+                "momentum": {"direction": "up", "phase": "steady"},
+                "proposal": None,
+            }
+        ),
+        json.dumps(
+            {
+                "analysis": "قیمت ۳۶۳۶ است",
+                "tool_calls": [],
+                "momentum": {"direction": "up", "phase": "steady"},
+                "proposal": None,
+            }
+        ),
+    ]
+
+    class MCP:
+        def tools_for_prompt(self, allow=None, limit=24):  # noqa: ANN001
+            return [{"name": "market_snapshot", "description": "snap", "args": {}}]
+
+        def call_tool(self, name, arguments=None):  # noqa: ANN001
+            return {"symbol": "XAUUSD", "bid": 1839.5, "ask": 1839.6}
+
+    seen: list[list[dict[str, str]]] = []
+
+    def chat(messages):  # noqa: ANN001
+        seen.append(list(messages))
+        return replies[min(len(seen) - 1, 1)]
+
+    agent = ToolAgent(chat=chat, mcp=MCP(), price_ref=lambda: 3636.0, max_rounds=3)
+    trace = agent.run({})
+    assert trace.calls[0].note, "باید هشدار ناهم‌مقیاس بودن داشته باشد"
+    assert "3636" in trace.calls[0].note
+    assert "note" in seen[1][-1]["content"]
