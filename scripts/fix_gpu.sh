@@ -42,16 +42,42 @@ print(tot)
 
 ollama_ready() { curl -s --max-time 4 "$OURL/api/tags" 2>/dev/null | grep -q '"models"'; }
 
+have_user_bus() { command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }
+
+unit_file() { printf '%s' "$HOME/.config/systemd/user/ollama.service"; }
+
 restart_ollama() {
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
-    systemctl --user restart ollama.service 2>/dev/null && dim "ollama.service restarted"
-  else
-    pkill -f 'ollama serve' 2>/dev/null; sleep 1
-    (nohup ollama serve >/tmp/ollama.log 2>&1 &)
-    dim "started ollama serve in the background"
+  local unit; unit="$(unit_file)"
+  # اگر واحد وجود دارد، فقط از راه systemd ری‌استارت کن؛ ساختن پروسهٔ دستی
+  # نسخهٔ دوم روی همان پورت می‌سازد و بعد معلوم نیست کدام جواب می‌دهد.
+  if [[ -f "$unit" ]] && have_user_bus; then
+    systemctl --user daemon-reload 2>/dev/null
+    if systemctl --user restart ollama.service 2>/dev/null; then
+      dim "restarted via systemd (ollama.service)"
+    else
+      warn "systemd could not restart the unit - falling back to a plain process"
+    fi
+  elif [[ -f "$unit" ]]; then
+    warn "no user systemd bus here; the unit exists but cannot be managed"
   fi
-  for _ in $(seq 1 45); do ollama_ready && return 0; sleep 1; done
-  return 1
+  if ! ollama_ready_for 20; then
+    local n; n="$(pgrep -x ollama 2>/dev/null | wc -l)"
+    if (( n == 0 )); then
+      (nohup ollama serve >/tmp/ollama-$USER.log 2>&1 &)
+      dim "started a background ollama serve (no service to manage)"
+    fi
+  fi
+  ollama_ready_for 60 || return 1
+  local count; count="$(pgrep -x ollama 2>/dev/null | wc -l)"
+  if (( count > 1 )); then
+    warn "$count ollama processes are running - the API may answer from either one"
+    dim "clean up: pkill -x ollama && systemctl --user restart ollama.service"
+  fi
+  return 0
+}
+
+ollama_ready_for() {  # ollama_ready_for <seconds>
+  local i; for i in $(seq 1 "${1:-20}"); do ollama_ready && return 0; sleep 1; done; return 1
 }
 
 load_model() {
