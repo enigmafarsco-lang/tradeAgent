@@ -398,3 +398,62 @@ def test_analysis_as_object_is_flattened() -> None:
     )
     trace = agent.run({})
     assert trace.analysis == "price_trend: صعودی؛ spread: کم"
+
+
+def test_unknown_tool_error_lists_the_real_tools() -> None:
+    """مدل نام ابزار از خودش می‌سازد؛ خطا باید فهرست واقعی را بدهد."""
+    replies = [
+        json.dumps(
+            {
+                "analysis": "تحلیل فارسی",
+                "tool_calls": [{"tool": "MovingAverage", "arguments": {"symbol": "XAUUSD_i"}}],
+                "momentum": {"direction": "up", "phase": "steady"},
+                "proposal": None,
+            }
+        )
+    ]
+    agent = ToolAgent(
+        chat=lambda m: replies[0],
+        mcp=None,
+        local_tools={"local_tick_digest": lambda **_: {"last_price": 1.0}},
+        max_rounds=1,
+    )
+    trace = agent.run({})
+    call = trace.calls[0]
+    assert call.ok is False
+    assert "local_tick_digest" in call.error
+
+
+def test_english_analysis_gets_one_persian_reminder() -> None:
+    english = json.dumps(
+        {
+            "analysis": "The price is going up fast.",
+            "tool_calls": [{"tool": "local_tick_digest", "arguments": {}}],
+            "momentum": {"direction": "up", "phase": "accelerating"},
+            "proposal": None,
+        }
+    )
+    persian = json.dumps(
+        {
+            "analysis": "قیمت با شتاب بالا می‌رود.",
+            "tool_calls": [],
+            "momentum": {"direction": "up", "phase": "accelerating"},
+            "proposal": None,
+        }
+    )
+    seen: list[list[dict[str, str]]] = []
+
+    def chat(messages):  # noqa: ANN001
+        seen.append(list(messages))
+        return english if len(seen) == 1 else persian
+
+    agent = ToolAgent(
+        chat=chat,
+        mcp=None,
+        local_tools={"local_tick_digest": lambda **_: {"last_price": 1.0}},
+        max_rounds=3,
+    )
+    trace = agent.run({})
+    assert len(seen) >= 2
+    assert "Persian" in seen[1][-1]["content"]
+    assert trace.analysis.startswith("قیمت")

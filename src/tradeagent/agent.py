@@ -252,13 +252,23 @@ class ToolAgent:
             tools = []
         return local + tools
 
-    def _execute(self, call: dict[str, Any], budget: int) -> ToolCallRecord | None:
+    def _execute(
+        self, call: dict[str, Any], budget: int, known: set[str] | None = None
+    ) -> ToolCallRecord | None:
         name = str(call.get("tool") or call.get("name") or "").strip()
         args = call.get("arguments") or call.get("args") or {}
         if not isinstance(args, dict):
             args = {}
         if not name:
             return None
+        if known is not None and name not in known:
+            # مدل نام ابزار را از خودش می‌سازد (MovingAverage، RSI، MACD…)؛ فهرست واقعی را بده
+            return ToolCallRecord(
+                tool=name,
+                arguments=args,
+                ok=False,
+                error="ابزار ناشناخته؛ از این‌ها انتخاب کن: " + ", ".join(sorted(known)[:25]),
+            )
         if name in self.local_tools:
             if budget <= 0:
                 return ToolCallRecord(tool=name, arguments=args, ok=False, error="سقف فراخوانی ابزار پر شد")
@@ -311,6 +321,7 @@ class ToolAgent:
     def run(self, context: dict[str, Any], skill_text: str = "") -> AgentTrace:
         trace = AgentTrace()
         tools = self.available_tools()
+        known = {str(t.get("name")) for t in tools if isinstance(t, dict)} | set(self.local_tools)
         system = CONTRACT % {"max_calls": self.max_calls}
         if tools:
             system += "\nAvailable tools:\n" + json.dumps(tools, ensure_ascii=False)
@@ -362,8 +373,11 @@ class ToolAgent:
                 ).strip()
             else:
                 analysis = str(raw_analysis or "").strip()
+            persian = True
             if analysis:
                 trace.analysis = analysis[:600]
+                # قرارداد فارسی خواسته است؛ متن انگلیسی یعنی پاسخ ناقص
+                persian = bool(re.search(r"[\u0600-\u06FF]", analysis))
             momentum = data.get("momentum")
             if isinstance(momentum, dict) and momentum:
                 trace.momentum = momentum
@@ -385,7 +399,7 @@ class ToolAgent:
             for call in calls[: max(0, budget)]:
                 if not isinstance(call, dict):
                     continue
-                rec = self._execute(call, budget)
+                rec = self._execute(call, budget, known)
                 if rec is None:
                     continue
                 budget -= 1 if rec.error != "سقف فراخوانی ابزار پر شد" else 0
@@ -407,6 +421,11 @@ class ToolAgent:
                         )
                     if not trace.momentum:
                         missing.append('"momentum" filled in, judging direction/phase/strength yourself')
+                    if not persian:
+                        missing.append(
+                            '"analysis" written in Persian (it came back in English); keep the '
+                            "numbers you saw, translate the sentences"
+                        )
                     if missing:
                         messages.append({"role": "assistant", "content": (reply or "")[:2000]})
                         messages.append(
@@ -440,7 +459,9 @@ class ToolAgent:
                         ensure_ascii=False,
                         default=str,
                     )[:5000]
-                    + "\nNow reply with the same JSON contract (analysis, tool_calls, proposal).",
+                    + "\nNow reply with the same JSON contract (analysis, tool_calls, proposal, momentum)."
+                    + ("" if persian else "\nWrite analysis and reason in Persian (فارسی).")
+                    + ("" if trace.momentum else '\nFill in "momentum" yourself from these numbers.'),
                 }
             )
             if budget <= 0:
