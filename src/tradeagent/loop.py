@@ -212,29 +212,52 @@ class Runner:
 
     @staticmethod
     def _ea_log() -> dict[str, Any]:
-        """متاتریدر خودش می‌گوید چه خبر است؛ لاگش را بخوان تا کاربر کپی نکند."""
+        """متاتریدر خود می‌گوید چه خبر است؛ لاگش را بخوان تا کاربر کپی نکند.
+
+        دو فایل وجود دارد: ``MQL5/Logs`` (تب Experts، جای خطوط trade-mcp) و ``logs``
+        (Journal). «تازه‌ترین فایل» کافی نیست - ممکن است Journal باشد و هیچ خط اکسپرت
+        نداشته باشد، پس اول فایلی که واقعاً خط trade-mcp دارد.
+        """
         import os
 
         prefix = Path(os.environ.get("MT5_WINEPREFIX") or (Path.home() / "Wine")) / "drive_c"
         patterns = (
             "Program Files/MetaTrader 5/MQL5/Logs/*.log",
-            "Program Files/MetaTrader 5/logs/*.log",
             "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
+            "Program Files/MetaTrader 5/logs/*.log",
             "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
         )
         files = [f for pat in patterns for f in prefix.glob(pat)]
         if not files:
             return {"found": False}
         newest = max(files, key=lambda f: f.stat().st_mtime)
-        try:
-            lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return {"found": False}
-        ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+        best: tuple[float, Path, list[str]] | None = None
+        for f in files:
+            try:
+                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+            if not ea:
+                continue
+            m = f.stat().st_mtime
+            if best is None or m > best[0]:
+                best = (m, f, ea)
+        if best is None:
+            return {
+                "found": True,
+                "file": str(newest),
+                "age_s": int(time.time() - newest.stat().st_mtime),
+                "last": [],
+                "refused": False,
+                "connected": False,
+                "no_line": True,
+            }
+        m, f, ea = best
         return {
             "found": True,
-            "file": str(newest),
-            "age_s": int(time.time() - newest.stat().st_mtime),
+            "file": str(f),
+            "age_s": int(time.time() - m),
             "last": ea[-2:],
             "refused": any("err=4014" in ln for ln in ea[-6:]),
             "connected": any("connected" in ln.lower() for ln in ea[-6:]),

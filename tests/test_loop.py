@@ -169,3 +169,26 @@ def test_ea_log_is_read_from_the_prefix(tmp_path, monkeypatch) -> None:
     assert info["found"] is True
     assert info["refused"] is True
     assert "err=4014" in info["last"][-1]
+
+
+def test_ea_log_prefers_the_file_that_has_expert_lines(tmp_path, monkeypatch) -> None:
+    """Journal تازه‌تر است ولی خط اکسپرت ندارد؛ نباید آن را به‌جای Experts بدهد."""
+    from tradeagent.loop import Runner
+
+    root = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5"
+    (root / "MQL5" / "Logs").mkdir(parents=True)
+    (root / "logs").mkdir(parents=True)
+    (root / "MQL5" / "Logs" / "20261127.log").write_text(
+        "2026.11.27 14:52:32\tTradeMCPConnector\t[trade-mcp] connect to 127.0.0.1:8787 failed, err=4014\n",
+        encoding="utf-8",
+    )
+    journal = root / "logs" / "20261127.log"
+    journal.write_text("2026.11.27 15:00:01\tNetwork\tterminal synchronized\n", encoding="utf-8")
+    import os
+
+    os.utime(journal, None)  # Journal تازه‌تر است
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+
+    info = Runner._ea_log()
+    assert "MQL5" in info["file"]
+    assert info["refused"] is True

@@ -75,17 +75,24 @@ def port_open(host="127.0.0.1", port=8787) -> bool:
 
 
 def ea_log_tail(n=2):
-    """آخرین خطوط سمت متاتریدر، تا لازم نباشد کاربر لاگ را کپی کند."""
+    """آخرین خطوط سمت متاتریدر؛ اول فایلی که واقعاً خط trade-mcp دارد (نه Journal)."""
     if not EXPERT_LOGS:
         return []
+    best = None
+    for f in EXPERT_LOGS:
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+        if keep:
+            best = (f.stat().st_mtime, keep)
+    if best:
+        return best[1][-n:]
     try:
         lines = EXPERT_LOGS[-1].read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
-    if keep:
-        return keep[-n:]
-    # اگر هیچ خط trade-mcp نبود، آخرین خط‌ها را بی‌فیلتر نشان بده (شاید اکسپرت اجرا نشده)
     return [f"(no trade-mcp line) {ln}" for ln in lines[-1:]]
 
 

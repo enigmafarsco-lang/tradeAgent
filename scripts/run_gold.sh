@@ -63,10 +63,20 @@ except (OSError, subprocess.SubprocessError):
     procs = []
 print(f"  terminal64.exe: {('running (' + procs[0][:70] + ')') if procs else 'NOT running - متاتریدر باز نیست'}")
 
+# فایل Journal هم هست؛ اول آن را که واقعاً خط trade-mcp دارد بردار
+with_ea = []
+for f in found:
+    try:
+        txt = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    if "trade-mcp" in txt.lower() or "TradeMCPConnector" in txt:
+        with_ea.append(f)
+
 if not found:
     print(f"  Experts log: هیچ *.log زیر {c} پیدا نشد")
 else:
-    f = found[-1]
+    f = (max(with_ea, key=lambda x: x.stat().st_mtime) if with_ea else found[-1])
     age = int(time.time() - f.stat().st_mtime)
     print(f"  Experts log: {f.relative_to(c)} (آخرین نوشتن {age}s پیش)")
     lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
