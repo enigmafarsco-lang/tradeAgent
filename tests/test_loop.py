@@ -471,3 +471,24 @@ def test_verify_quiet_hides_the_tool_table() -> None:
     body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert "VERIFY_QUIET" in body
     assert 'ابزارها: {len(calls) - len(bad)}/{len(calls)} موفق' in body
+
+
+def test_one_shot_reads_the_tick_line_the_way_diag_prints_it() -> None:
+    """چکیده نباید «تیک نمی‌رسد» بگوید وقتی تیک می‌رسد؛ الگو باید با خروجی diag بخواند."""
+    from pathlib import Path
+    import re
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "one_shot.sh").read_text(encoding="utf-8")
+    line = "    XAUUSD_i: 2 فایل · 20261127.csv · 0s پیش · 2208863 بایت"
+    m = re.search(r"XAUUSD_i: (\d+) فایل · \S+ · (\d+)s پیش", line)
+    assert m and m.group(1) == "2" and m.group(2) == "0"
+    assert "tradeagent.diag import report" in body  # همان مسیری که --status استفاده می‌کند
+    assert 'VERIFY_QUIET' in body
+
+
+def test_verify_quiet_is_read_from_the_environment() -> None:
+    """QUIET داخل heredoc پایتون نمی‌رسد؛ باید از os.environ خوانده شود."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert 'QUIET = os.environ.get("VERIFY_QUIET") == "1"' in body

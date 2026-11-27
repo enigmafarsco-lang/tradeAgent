@@ -163,8 +163,7 @@ ensure_env() {
 }
 
 if [[ "$MODE" == "verify" ]]; then
-  QUIET=0
-  [[ "${VERIFY_QUIET:-0}" == "1" ]] && QUIET=1
+  QUIET="${VERIFY_QUIET:-0}"
   step "یک چرخهٔ واقعی، همین حالا"
   WAS_ACTIVE=0
   systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 && WAS_ACTIVE=1
@@ -181,8 +180,9 @@ if [[ "$MODE" == "verify" ]]; then
 
   "$PY" -m tradeagent --config configs/gold.toml loop --once --llm > /tmp/tradeagent-verify.json 2>&1
   "$PY" - <<'PY'
-import json, pathlib
+import json, os, pathlib
 
+QUIET = os.environ.get("VERIFY_QUIET") == "1"
 raw = pathlib.Path("/tmp/tradeagent-verify.json").read_text(encoding="utf-8", errors="replace")
 start = raw.find("{")
 try:

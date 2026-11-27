@@ -18,15 +18,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 "$ROOT/scripts/start_mt5.sh" >"$TMP/mt5.log" 2>&1 || true
-"$PY" -m tradeagent --config configs/gold.toml diag >"$TMP/diag.log" 2>&1 || true
+MT5_WINEPREFIX="${MT5_WINEPREFIX:-$HOME/Wine}" "$PY" -c 'from tradeagent.diag import report; report()' >"$TMP/diag.log" 2>&1 || true
 VERIFY_QUIET=1 "$ROOT/scripts/run_gold.sh" --verify >"$TMP/verify.log" 2>&1 || true
 
 "$PY" - "$TMP" <<'PY'
-import pathlib, re, sys
+import os, pathlib, re, sys
 
 tmp = pathlib.Path(sys.argv[1])
 diag = (tmp / "diag.log").read_text(encoding="utf-8", errors="replace")
 verify = (tmp / "verify.log").read_text(encoding="utf-8", errors="replace")
+assert os.environ.get("VERIFY_QUIET") in (None, "1", "0", "")
 
 
 def grab(pattern: str, text: str, default: str = "?") -> str:
@@ -36,17 +37,26 @@ def grab(pattern: str, text: str, default: str = "?") -> str:
 
 mt5 = "باز" if "NOT running" not in diag else "بسته"
 bridge = grab(r"ea_connected=(\w+)", diag)
-ticks = grab(r"XAUUSD_i: (\d+) فایل", diag, "0")
-age = grab(r"XAUUSD_i: \d+ فایل · \S+ · (\d+)s پیش", diag, "—")
 cycle = grab(r"چرخه (\d+) \|", verify)
 bars = grab(r"bars=(\d+)", verify)
 llm = grab(r"llm=(\w+)", verify)
 equity = grab(r"equity=([\d.]+)", verify)
-tools = grab(r"ابزارها: (.+)", verify)
-action = grab(r"اقدام: (.+)", verify)
+tools = grab(r"ابزارها: (.+)", verify, "—")
+action = grab(r"اقدام: (.+)", verify, "—")
 mom = grab(r"حکم تکانه: (.+)", verify)
 analysis = grab(r"تحلیل: (.{0,120})", verify)
 error = grab(r"ایجنت: .*?error=(.+)", verify, "-")
+
+def tick_line(text: str) -> tuple[str, str]:
+    m = re.search(r"XAUUSD_i: (\d+) فایل · \S+ · (\d+)s پیش", text)
+    if m:
+        return m.group(1), m.group(2)
+    if "XAUUSD_i: هیچ فایلی نیست" in text:
+        return "0", "—"
+    return "?", "—"
+
+
+ticks, age = tick_line(diag)
 
 print()
 print("────────── خلاصه ──────────")
