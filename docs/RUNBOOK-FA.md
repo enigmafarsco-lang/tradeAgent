@@ -253,3 +253,18 @@ systemctl --user start tradeagent-loop
 * اگر `ollama` از قبل هست: `./scripts/setup_llm.sh --ollama`.
 
 هر دو مسیر اختیاری‌اند: بدون هیچ‌کدام، چرخه‌ها با تصمیم قطعی اجرا می‌شوند.
+
+## هاروستر بعد از ریبوت
+
+اگر MT5 خودکار بالا نیاید، ضربان قطع می‌شود (نشانگی: `heartbeat ... STALE`).
+
+```bash
+./scripts/watch_harvester.sh --auto --install-boot --install-timer
+```
+
+* `--install-boot` واحد `tradeagent-mt5.service` می‌سازد که در هر ورود ترمینال را با
+  `startup.ini` و اکسپرت باز می‌کند؛
+* `--install-timer` هر ۵ دقیقه بررسی می‌کند و در صورت قطع، خودش ترمینال را دوباره
+  بالا می‌آورد و تا ۳۰۰ ثانیه (`WATCH_WAIT`) منتظر ضربان تازه می‌ماند؛
+* اگر باز هم نیامد، **خودش** علت را از `var/logs/mt5.out` و جدیدترین لاگ ترمینال
+  (خطوط Expert/error) چاپ می‌کند و می‌گوید مشکل Wine/نمایش است یا اکسپرت.

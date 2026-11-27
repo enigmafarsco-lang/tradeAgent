@@ -8,6 +8,7 @@
 #   ./scripts/watch_harvester.sh --auto --install-timer   # هر ۵ دقیقه در پس‌زمینه
 #   ./scripts/watch_harvester.sh --max-silence 1200
 #   ./scripts/watch_harvester.sh --dry-run        # بگو چه می‌کرد
+#   ./scripts/watch_harvester.sh --install-boot   # ترمینال را در هر ورود خودکار باز کن
 # ---------------------------------------------------------------------------
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,6 +18,8 @@ MAX_SILENCE="${MAX_SILENCE:-900}"
 AUTO=0
 DRY=0
 INSTALL_TIMER=0
+INSTALL_BOOT=0
+WATCH_WAIT="${WATCH_WAIT:-300}"
 LOG="$ROOT/var/logs/watch.log"
 mkdir -p "$ROOT/var/logs"
 
@@ -25,12 +28,36 @@ while [[ $# -gt 0 ]]; do
     --auto) AUTO=1 ;;
     --dry-run) DRY=1 ;;
     --install-timer) INSTALL_TIMER=1 ;;
+    --install-boot) INSTALL_BOOT=1 ;;
     --max-silence) MAX_SILENCE="${2:-900}"; shift ;;
     -h|--help) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1"; exit 2 ;;
   esac
   shift
 done
+
+install_boot() {
+  local dir="$HOME/.config/systemd/user"
+  mkdir -p "$dir"
+  cat > "$dir/tradeagent-mt5.service" <<UNIT
+[Unit]
+Description=tradeAgent MT5 terminal (tick harvester)
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$ROOT/scripts/setup_once.sh
+UNIT
+  systemctl --user daemon-reload 2>/dev/null || true
+  if systemctl --user enable tradeagent-mt5.service 2>/dev/null; then
+    ok "MT5 will start at every login: tradeagent-mt5.service"
+    dim "now: systemctl --user start tradeagent-mt5.service   |   off: systemctl --user disable --now tradeagent-mt5.service"
+  else
+    bad "could not enable tradeagent-mt5.service"
+    return 1
+  fi
+}
 
 install_timer() {
   local dir="$HOME/.config/systemd/user"
@@ -70,6 +97,9 @@ ok()    { printf '\033[1;32m[watch]\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m[watch]\033[0m %s\n' "$*"; }
 bad()   { printf '\033[1;31m[watch]\033[0m %s\n' "$*"; }
 
+if (( INSTALL_BOOT == 1 )); then
+  install_boot || { bad "could not install the login unit"; exit 1; }
+fi
 if (( INSTALL_TIMER == 1 )); then
   install_timer || { bad "could not install the timer"; exit 1; }
   [[ "${1:-}" == "--only-timer" ]] && exit 0
@@ -145,14 +175,32 @@ else
   exit 1
 fi
 
-# انتظار تا ضربان تازه
-for i in $(seq 1 60); do
+# انتظار تا ضربان تازه (راه‌اندازی MT5 زیر Wine چند دقیقه طول می‌کشد)
+waited=0
+while (( waited < WATCH_WAIT )); do
   if (( $(age_of "$HB_FILE") <= 180 )); then
     ok "heartbeat is fresh again ($(age_of "$HB_FILE")s)"
     say "recovered"
     exit 0
   fi
-  sleep 2
+  sleep 5; waited=$((waited + 5))
+  (( waited % 30 == 0 )) && dim "waiting for the terminal... ${waited}s / ${WATCH_WAIT}s"
 done
-bad "still no fresh heartbeat after 120s - check var/logs/mt5.out"
+bad "still no fresh heartbeat after ${WATCH_WAIT}s - why (read from the terminal's own log):"
+
+# تشخیص خودکار: لاگ Wine و لاگ خود ترمینال
+if [[ -f "$ROOT/var/logs/mt5.out" ]]; then
+  echo "  --- var/logs/mt5.out (tail) ---"
+  tail -n 12 "$ROOT/var/logs/mt5.out" | sed 's/^/    /'
+fi
+DATA_LOG="$(find "$PREFIX/drive_c" -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
+if [[ -n "$DATA_LOG" && -f "$DATA_LOG" ]]; then
+  echo "  --- newest terminal log: $DATA_LOG ---"
+  grep -iE 'expert|error|fail|harvester|autotrading|denied|not allowed' "$DATA_LOG" 2>/dev/null | tail -n 12 | sed 's/^/    /'
+fi
+if ! pgrep -f 'terminal64\.exe' >/dev/null 2>&1; then
+  bad "the terminal process is not running at all: Wine/display problem, not an EA problem"
+  echo "    ./scripts/setup_once.sh --preview   # shows the exact wine command"
+  echo "    ./scripts/setup_once.sh --restart   # forces a fresh instance"
+fi
 exit 1
