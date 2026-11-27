@@ -126,11 +126,27 @@ def cmd_cycle(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_loop(cfg: Config, args: argparse.Namespace) -> int:
     runner = _runner(cfg)
     if getattr(args, "once", False):
-        result = runner.run_cycle(
-            publish=True,
-            force_llm=bool(getattr(args, "llm", False)),
-            wait_ea_s=float(getattr(args, "wait_ea", 0) or 0),
-        )
+        try:
+            result = runner.run_cycle(
+                publish=True,
+                force_llm=bool(getattr(args, "llm", False)),
+                wait_ea_s=float(getattr(args, "wait_ea", 0) or 0),
+            )
+        except Exception as exc:  # noqa: BLE001 - یک چرخه نباید کل ابزار را با traceback بکشد
+            import traceback
+
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "trace": traceback.format_exc()[-1200:],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     return runner.run_forever(args.interval)

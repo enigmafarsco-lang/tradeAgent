@@ -457,7 +457,10 @@ class Runner:
         now_ts = int(now_ts or time.time())
         ea_wait: dict[str, Any] | None = None
         if wait_ea_s > 0:
-            ea_wait = self.wait_for_ea(wait_ea_s)
+            try:
+                ea_wait = self.wait_for_ea(wait_ea_s)
+            except Exception as exc:  # noqa: BLE001
+                ea_wait = {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
             LOG.info("انتظار اکسپرت: %s", ea_wait)
         cycle = self.store.next_cycle_index()
         policy_in = self.current_policy()

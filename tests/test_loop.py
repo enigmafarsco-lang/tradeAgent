@@ -551,3 +551,14 @@ def test_wait_for_ea_returns_a_price_when_it_connects(cfg: Config) -> None:
     got = runner.wait_for_ea(timeout_s=1, step_s=0.1)
     assert got["ok"] is True
     assert 3630 < got["price"] < 3640
+
+
+def test_verify_json_is_found_after_the_logs() -> None:
+    """خروجی loop لاگ هم دارد؛ JSON از «{\\n  \"ok\"» باید پیدا شود وگرنه «چرخه ?» می‌شود."""
+    import json
+
+    raw = '[gold] چیزی نوشت {"x": 1}\n2026-11-27 INFO شروع\n{\n  "ok": true,\n  "cycle": 5\n}\n'
+    start = raw.rfind('\n{\n  "ok"')
+    start = start + 1 if start >= 0 else raw.find("{")
+    data = json.loads(raw[start:])
+    assert data["cycle"] == 5

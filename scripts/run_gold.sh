@@ -185,12 +185,17 @@ import json, os, pathlib
 
 QUIET = os.environ.get("VERIFY_QUIET") == "1"
 raw = pathlib.Path("/tmp/tradeagent-verify.json").read_text(encoding="utf-8", errors="replace")
-start = raw.find("{")
+# لاگ‌ها هم داخل همان فایل‌اند؛ JSON از آخرین «{\n  "ok"» شروع می‌شود
+start = raw.rfind('\n{\n  "ok"')
+start = start + 1 if start >= 0 else raw.find("{")
 try:
     data = json.loads(raw[start:]) if start >= 0 else {}
 except ValueError:
-    print(raw[-1500:])
+    tail = [ln for ln in raw.strip().splitlines() if ln.strip()][-6:]
+    print("  خطای چرخه: " + " | ".join(tail)[-400:])
     data = {}
+if data.get("error"):
+    print("  خطای چرخه: " + str(data["error"])[:400])
 
 agent = data.get("agent") or {}
 compact = data.get("compact") or {}

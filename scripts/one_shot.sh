@@ -110,6 +110,9 @@ print(f"چرخه {cycle} | bars={bars} | llm={llm} | equity={equity}")
 print(f"ابزارها: {tools}")
 print(f"اقدام: {action}")
 print(f"حکم: {mom}")
+cycle_error = grab(r"خطای چرخه: (.+)", verify, "")
+if cycle_error:
+    print(f"خطای چرخه: {cycle_error[:200]}")
 if analysis != "?":
     print(f"تحلیل مدل: {analysis}")
 if error not in ("-", "?"):
@@ -121,6 +124,8 @@ if llm != "True":
     bad.append("مدل جواب نداد")
 if mom.strip() in ("مدل برنگرداند", "?", "—") or "None" in mom:
     bad.append("حکم تکانه نیامد")
+if cycle_error:
+    bad.append("چرخه خطا داد")
 if "غیرمجاز" in tools or "ابزار ناشناخته" in tools:
     bad.append("مدل ابزار اشتباه صدا زد")
 if bars in ("0", "?"):
