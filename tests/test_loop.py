@@ -332,3 +332,20 @@ def test_diag_reports_the_symbol_the_loop_needs(tmp_path, monkeypatch) -> None:
     mine = info["watch"][0]
     assert mine["symbol"] == "XAUUSD_i"
     assert mine["files"] == 0 and mine["age_s"] is None
+
+
+def test_status_json_with_a_datetime_uptime_is_still_readable(tmp_path, monkeypatch) -> None:
+    """اکسپرت uptime_s را تاریخ می‌نویسد و JSON نامعتبر می‌شود؛ عددها باید باز خوانده شوند."""
+    from tradeagent.diag import harvester_status
+
+    d = tmp_path
+    (d / "status.json").write_text(
+        '{"ea":"TickHarvester","uptime_s":1970.01.01 00:52:55,"polls":812,'
+        '"total_ticks":15234,"total_errors":3,'
+        '"symbols":[{"symbol":"XAUUSD_i","ticks":15234,"errors":0,"age_s":3}]}',
+        encoding="utf-8",
+    )
+    st = harvester_status(d)
+    assert st["broken"] is True
+    assert st["polls"] == 812 and st["total_ticks"] == 15234 and st["errors"] == 3
+    assert st["symbols"] == [{"symbol": "XAUUSD_i", "ticks": 15234, "age_s": 3}]

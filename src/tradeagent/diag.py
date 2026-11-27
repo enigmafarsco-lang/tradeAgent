@@ -212,6 +212,34 @@ def mt5_pids(proc_root: Path = Path("/proc")) -> list[str]:
     return sorted(pids, key=int)
 
 
+def _loose_status(text: str) -> dict[str, Any]:
+    """status.json وقتی JSON معتبر نیست (مثلاً فیلد تاریخ در جای عدد) باز هم خوانده شود."""
+    def num(key: str) -> int | None:
+        m = re.search(r'"' + key + r'"\s*:\s*(-?\d+)', text)
+        return int(m.group(1)) if m else None
+
+    symbols = []
+    for m in re.finditer(r'\{[^{}]*"symbol"\s*:\s*"([^"]+)"[^{}]*\}', text):
+        block = m.group(0)
+        ticks = re.search(r'"ticks"\s*:\s*(-?\d+)', block)
+        age = re.search(r'"age_s"\s*:\s*(-?\d+)', block)
+        symbols.append(
+            {
+                "symbol": m.group(1),
+                "ticks": int(ticks.group(1)) if ticks else None,
+                "age_s": int(age.group(1)) if age else None,
+            }
+        )
+    return {
+        "broken": True,
+        "head": text[:160],
+        "polls": num("polls"),
+        "total_ticks": num("total_ticks"),
+        "errors": num("total_errors"),
+        "symbols": symbols,
+    }
+
+
 def harvester_status(dir_path: Path) -> dict[str, Any]:
     """status.json خودِ اکسپرت: چند نماد، چند تیک، چند خطا."""
     path = dir_path / "status.json"
@@ -229,8 +257,7 @@ def harvester_status(dir_path: Path) -> dict[str, Any]:
         except (UnicodeDecodeError, ValueError):
             continue
     if not isinstance(data, dict):
-        head = blob[:200].decode("utf-8", "replace").replace("\x00", "·")
-        return {"broken": True, "head": head}
+        return _loose_status(blob.decode("utf-8", "replace"))
     symbols = data.get("symbols") or []
     return {
         "ea": data.get("ea"),
@@ -392,8 +419,8 @@ def report() -> None:
                 )
         st = h.get("status") or {}
         if st.get("broken"):
-            print(f"    status.json خوانده نشد: {st.get('head')}")
-        elif st:
+            print("    status.json باگ اکسپرت است (uptime_s تاریخ نوشته می‌شود)؛ عددها از متن خوانده شد")
+        if st:
             syms = ", ".join(
                 f"{x['symbol']}({x['ticks']}t,{x['age_s']}s)" for x in st.get("symbols") or []
             )

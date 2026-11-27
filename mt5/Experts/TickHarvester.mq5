@@ -344,7 +344,7 @@ void WriteStatus()
    out += "\"trading_allowed\":" + (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "true" : "false") + ",";
    out += "\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\",";
    out += "\"login\":" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + ",";
-   out += "\"uptime_s\":" + (string)(TimeGMT() - g_started) + ",";
+   out += "\"uptime_s\":" + (string)((long)TimeGMT() - (long)g_started) + ",";
    out += "\"polls\":" + (string)g_poll_count + ",";
    out += "\"total_ticks\":" + (string)g_total_written + ",";
    out += "\"total_errors\":" + (string)g_total_errors + ",";
