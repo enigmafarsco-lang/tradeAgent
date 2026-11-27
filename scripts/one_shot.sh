@@ -122,6 +122,29 @@ if analysis != "?":
     print(f"تحلیل مدل: {analysis}")
 if error not in ("-", "?"):
     print(f"خطای ایجنت: {error}")
+try:
+    import sqlite3
+
+    db = sqlite3.connect("var/paper.sqlite3")
+    db.row_factory = sqlite3.Row
+    rows = db.execute(
+        "SELECT variant, exit_reason, pnl_bps, r_multiple FROM trades ORDER BY exit_ts DESC LIMIT 5"
+    ).fetchall()
+    agg = db.execute(
+        "SELECT COUNT(*) n, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) w FROM trades"
+    ).fetchone()
+    if rows:
+        win = agg["w"] or 0
+        print(f"معاملات: {agg['n']} بسته‌شده · برنده {win} ({100.0 * win / max(1, agg['n']):.0f}%)")
+        print(
+            "  آخرین‌ها: "
+            + " ، ".join(
+                f"{r['variant']}/{r['exit_reason']} {r['pnl_bps']:+.1f}bp" for r in rows[:3]
+            )
+        )
+except Exception as exc:  # noqa: BLE001
+    print(f"معاملات: خوانده نشد ({type(exc).__name__})")
+
 bad = []
 if not bridge_off and bridge not in ("True", "?"):
     bad.append("اکسپرت وصل نیست (ابزارهای متاتریدر نمی‌آیند)")
