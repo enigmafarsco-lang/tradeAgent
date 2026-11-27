@@ -114,6 +114,7 @@ class AgentTrace:
     rounds: int = 0
     error: str = ""
     repairs: int = 0
+    last_reply: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -122,6 +123,7 @@ class AgentTrace:
             "proposal": self.proposal,
             "momentum": self.momentum,
             "error": self.error,
+            "last_reply": self.last_reply[-800:],
             "calls": [c.as_dict() for c in self.calls],
         }
 
@@ -289,6 +291,7 @@ class ToolAgent:
         ]
         budget = self.max_calls
         repairs = 0
+        nudges = 0
         for round_no in range(1, self.max_rounds + 1):
             trace.rounds = round_no
             try:
@@ -296,6 +299,7 @@ class ToolAgent:
             except Exception as exc:  # noqa: BLE001 - مدل ممکن است در دسترس نباشد
                 trace.error = f"{type(exc).__name__}: {exc}"
                 return trace
+            trace.last_reply = (reply or "")[-2000:]
             data = parse_agent_reply(reply)
             if not data and repairs < 2:
                 # مدل کوچک گاهی متن آزاد می‌نویسد؛ یک بار «فقط JSON» را یادآوری کن
@@ -354,7 +358,30 @@ class ToolAgent:
                 trace.proposal = proposal
                 return trace
             if not records:
-                # مدل نه ابزاری خواست نه پیشنهادی داد
+                if nudges < 2 and budget > 0:
+                    nudges += 1
+                    missing = []
+                    if not trace.calls:
+                        missing.append(
+                            "a tool call - start with local_tick_digest (numbers from our own "
+                            "tick files) and local_candles for seconds=1,5,15"
+                        )
+                    if not trace.momentum:
+                        missing.append('"momentum" filled in, judging direction/phase/strength yourself')
+                    if missing:
+                        messages.append({"role": "assistant", "content": (reply or "")[:2000]})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your JSON is missing: " + "; ".join(missing) +
+                                    ". Reply again with the same JSON contract, now with those "
+                                    "parts present. Persian text, numbers only from tool results."
+                                ),
+                            }
+                        )
+                        LOG.info("ناقص بود (%s)؛ درخواست تکمیل", ", ".join(missing))
+                        continue
                 return trace
 
             messages.append({"role": "assistant", "content": reply})

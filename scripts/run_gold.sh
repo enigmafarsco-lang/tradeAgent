@@ -190,7 +190,8 @@ except ValueError:
     data = {}
 
 agent = data.get("agent") or {}
-print(f"  چرخه {data.get('cycle')} | llm={((data.get('compact') or {}).get('llm'))} "
+compact = data.get("compact") or {}
+print(f"  چرخه {data.get('cycle')} | llm={compact.get('llm')} | bars={compact.get('bars')} "
       f"| equity={data.get('equity')}")
 print(f"  سیاست: {data.get('policy')}")
 if agent:
@@ -211,6 +212,9 @@ if mom:
         print(f"  دلیل: {str(mom.get('reason'))[:200]}")
 else:
     print("  حکم تکانه: مدل برنگرداند")
+    raw_reply = str(agent.get("last_reply") or "").strip()
+    if raw_reply:
+        print(f"  آخرین پاسخ مدل (برای دیدن دلیل):\n    {raw_reply[-700:]}")
 PY
 
   step "حکم مدل در گزارش"

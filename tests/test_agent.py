@@ -114,7 +114,7 @@ def test_local_tools_are_offered_and_usable() -> None:
 
     def chat(messages):  # noqa: ANN001
         seen["n"] += 1
-        return replies[seen["n"] - 1]
+        return replies[min(seen["n"] - 1, len(replies) - 1)]
 
     agent = ToolAgent(chat=chat, mcp=None, local_tools={"local_tick_digest": local_tick_digest})
     assert [t["name"] for t in agent.available_tools()] == ["local_tick_digest"]
@@ -165,7 +165,7 @@ def test_free_text_reply_gets_one_json_repair_attempt() -> None:
     def chat(messages):  # noqa: ANN001
         sent.append(list(messages))
         seen["n"] += 1
-        return replies[seen["n"] - 1]
+        return replies[min(seen["n"] - 1, len(replies) - 1)]
 
     agent = ToolAgent(chat=chat, mcp=None)
     trace = agent.run({"cycle": 1})
@@ -335,3 +335,25 @@ def test_shortcut_installer_writes_a_launchable_desktop_file(tmp_path) -> None:
     assert "Exec=" in text and str(root / "scripts" / "start_mt5.sh") in text
     assert "Terminal=false" in text  # کلیک روی آیکون نباید پنجرهٔ کنسول باز کند
     assert os.access(desk, os.X_OK)
+
+
+def test_agent_asks_again_when_momentum_is_missing() -> None:
+    """مدل کوچک گاهی فقط analysis می‌دهد؛ باید یک بار دیگر خواسته شود، نه سکوت."""
+    replies = [
+        '{"analysis": "داده کم است", "tool_calls": [], "proposal": null}',
+        '{"analysis": "تیک‌ها صعودی‌اند", "tool_calls": [{"tool": "local_tick_digest", '
+        '"arguments": {}}], "momentum": {"direction": "up", "phase": "steady"}, "proposal": null}',
+        '{"analysis": "صعودی", "tool_calls": [], "momentum": {"direction": "up", '
+        '"phase": "steady", "strength": 0.6}, "proposal": null}',
+    ]
+    seen: list[list[dict[str, str]]] = []
+
+    def chat(messages):
+        seen.append(list(messages))
+        return replies[min(len(seen) - 1, len(replies) - 1)]
+
+    agent = ToolAgent(chat=chat, mcp=None, max_rounds=3, max_calls=4)
+    trace = agent.run({"symbol": "XAUUSD_i"})
+    assert len(seen) >= 2, "باید دوباره از مدل پرسیده شود"
+    assert "missing" in seen[1][-1]["content"]
+    assert trace.momentum and trace.momentum["direction"] == "up"
