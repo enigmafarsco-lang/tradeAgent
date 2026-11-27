@@ -31,53 +31,114 @@ dim()  { printf '\033[2m[mcp] %s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;35m=== %s\033[0m\n' "$*"; }
 
 if [[ "$MODE" == "watch" ]]; then
-  step "انتظار برای وصل شدن اکسپرت (هر ۵ ثانیه)"
-  printf '%s\n' "  در متاتریدر: Navigator → Expert Advisors → TradeMCPConnector را روی چارت $SYMBOL بکش"
-  printf '%s\n' "  و دکمهٔ Algo Trading را روشن کن. اینجا خبر می‌دهم."
-  i=0
-  while true; do
-    i=$((i+1))
-    OUT="$("$PY" - <<PY
-import sys
-sys.path.insert(0, "$ROOT/src")
-from tradeagent.mcp_client import MCPClient
-c = MCPClient("trade-mcp serve", timeout_s=20)
-if not c.start():
-    print("NOT"); raise SystemExit
-try:
-    st = c.call_tool("mt5_status")
-except Exception as exc:
-    print("NOT", exc); raise SystemExit
-if isinstance(st, dict) and st.get("ok"):
-    t = st.get("terminal") or {}
-    a = st.get("account") or {}
-    print("YES", t.get("company"), a.get("login"), a.get("balance"))
+  step "انتظار برای وصل شدن اکسپرت"
+  printf '  در متاتریدر اکسپرت باید روی چارت %s باشد و Algo Trading روشن.\n' "$SYMBOL"
+  printf '  نکته: پورت ۸۷۸۷ فقط یک صاحب دارد؛ اگر سرویس در حال اجراست، وضعیت را از همان می‌خوانم.\n'
+  printf '  اگر اکسپرت «loaded» می‌گوید ولی وصل نمی‌شود: در تنظیمات خود اکسپرت (تب Common)\n'
+  printf '  تیک «Allow Algo Trading» را بزن و دکمهٔ Algo Trading نوار ابزار را روشن کن.\n'
+
+  export ROOT SYMBOL
+  "$PY" -u - <<'PY'
+import json, os, pathlib, socket, sys, time
+
+ROOT = pathlib.Path(os.environ["ROOT"])
+SYMBOL = os.environ.get("SYMBOL", "XAUUSD_i")
+sys.path.insert(0, str(ROOT / "src"))
+
+STATE = (ROOT / "var" / "state")
+STATUS_FILES = [p for p in [
+    ROOT / "var" / "state" / "mcp_status.json",
+    ROOT / "var" / "mcp_status.json",
+] if p.exists()]
+
+
+def port_open() -> bool:
+    s = socket.socket()
+    s.settimeout(0.5)
+    try:
+        s.connect(("127.0.0.1", 8787))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def read_service_status():
+    """اگر سرویس (که صاحب سوکت است) وضعیت را منتشر کرده باشد، از او بخوان."""
+    newest, data = 0.0, None
+    for path in STATUS_FILES:
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            m = path.stat().st_mtime
+        except Exception:
+            continue
+        if m > newest:
+            newest, data = m, d
+    if data is None:
+        return None
+    return data if time.time() - newest < 900 else None
+
+
+owned = port_open()
+client = None
+if not owned:
+    from tradeagent.mcp_client import MCPClient
+    client = MCPClient("trade-mcp serve", timeout_s=25)
+    if client.start():
+        print("  [watch] یک سرور MCP بالا آوردم؛ تا وصل شدن زنده نگهش می‌دارم (نسخهٔ دوم ساخته نمی‌شود)")
+    else:
+        print("  [watch] سرور MCP بالا نیامد (نصب است؟)")
+        sys.exit(1)
 else:
-    print("NOT")
-c.close()
+    print("  [watch] پورت ۸۷۸۷ دست یک پروسهٔ دیگر است - همان صاحب سوکت را می‌پرسم")
+
+try:
+    for attempt in range(1, 361):   # ~۳۰ دقیقه
+        status = None
+        if client is not None:
+            try:
+                status = client.call_tool("mt5_status")
+            except Exception as exc:
+                status = {"ok": False, "error": str(exc)}
+        else:
+            status = read_service_status() or {"ok": False, "error": "سرویس وضعیت منتشر نکرده"}
+
+        bridge = (status or {}).get("bridge") or {}
+        ok = bool((status or {}).get("ok")) and bool(bridge.get("ea_connected", True))
+        if ok:
+            term = (status or {}).get("terminal") or {}
+            acc = (status or {}).get("account") or {}
+            print(f"\n  ✓ وصل شد! {term.get('company', '?')} | build {term.get('build', '?')} | "
+                  f"account {acc.get('login')} ({acc.get('server')}) balance={acc.get('balance')}")
+            print(f"  سوکت: {bridge.get('listen', '127.0.0.1:8787')} | متصل از "
+                  f"{bridge.get('connected_for_seconds', '?')} ثانیه پیش")
+            if client is not None:
+                try:
+                    snap = client.call_tool("market_snapshot", {"symbol": SYMBOL})
+                    q = (snap or {}).get("quote") or {}
+                    print(f"  {SYMBOL}: bid={q.get('bid')} ask={q.get('ask')} spread={(snap or {}).get('spread_points')} points")
+                    an = client.call_tool("analyze_market", {"symbol": SYMBOL})
+                    print("  --- تحلیل ابزار trade-mcp ---")
+                    print(json.dumps(an, ensure_ascii=False)[:900])
+                except Exception as exc:
+                    print("  تحلیل نشد:", exc)
+            else:
+                print("  (تحلیل را سرویس در چرخهٔ بعد با همین ابزارها انجام می‌دهد)")
+            sys.exit(0)
+
+        err = (status or {}).get("error")
+        extra = f" · {err}" if err else ""
+        print(f"  [{attempt:02d}] هنوز وصل نیست{extra}")
+        time.sleep(5)
+    print("\n  بعد از ۳۰ دقیقه وصل نشد. اگر اکسپرت روی چارت است، لاگ Experts متاتریدر را ببین:")
+    print("    Journal/Experts: «TradeMCPConnector … loaded» سپس «connected»")
+    sys.exit(2)
+finally:
+    if client is not None:
+        client.close()
 PY
-)"
-    case "$OUT" in
-      YES*)
-        ok "وصل شد! $OUT"
-        step "تحلیل واقعی طلا (از ابزار خود trade-mcp)"
-        "$PY" - <<PY
-import sys
-sys.path.insert(0, "$ROOT/src")
-from tradeagent.mcp_client import MCPClient
-c = MCPClient("trade-mcp serve", timeout_s=60)
-c.start()
-a = c.call_tool("analyze_market", {"symbol": "$SYMBOL"})
-import json
-print(json.dumps(a, ensure_ascii=False, indent=2)[:1200])
-c.close()
-PY
-        exit 0 ;;
-      *)
-        printf '  [%02d] هنوز وصل نیست...\r' "$i" ;;
-    esac
-    sleep 5
-  done
+  exit $?
 fi
 
 step "۱) ریپوی trade-mcp"

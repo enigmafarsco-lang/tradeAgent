@@ -171,6 +171,36 @@ class Runner:
 
         return {"local_tick_digest": local_tick_digest, "local_candles": local_candles}
 
+    def publish_mcp_status(self) -> dict[str, Any]:
+        """وضعیت پل متاتریدر را در یک فایل بنویس.
+
+        سوکت ۸۷۸۷ فقط یک صاحب دارد؛ اگر سرویس آن را گرفته باشد هیچ اسکریپت دیگری
+        نمی‌تواند «نسخهٔ دوم» بالا بیاورد. پس وضعیت را همین‌جا منتشر می‌کنیم.
+        """
+        status: dict[str, Any] = {"ts": utc_iso(), "mcp_ready": bool(self.mcp and self.mcp.enabled)}
+        if self.mcp and self.mcp.enabled:
+            try:
+                raw = self.mcp.call_tool("mt5_status")
+                if isinstance(raw, dict):
+                    status.update(
+                        {
+                            "ok": bool(raw.get("ok")),
+                            "bridge": raw.get("bridge") or {},
+                            "terminal": raw.get("terminal") or {},
+                            "account": raw.get("account") or {},
+                            "error": raw.get("error"),
+                            "hint": raw.get("hint"),
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                status["ok"] = False
+                status["error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            write_json(self.state_dir / "mcp_status.json", status)
+        except OSError:
+            pass
+        return status
+
     def skill_text(self) -> str:
         """متن مهارت آماده از trade-mcp (مثلاً gold_session_briefing)."""
         name = self.cfg.get("agent.skill_prompt", "")
@@ -266,7 +296,18 @@ class Runner:
         else:
             ingest = source.fetch(now_s=now_ts)
 
+        try:
+            mcp_status = self.publish_mcp_status()
+            if mcp_status.get("error") and "bind" in str(mcp_status.get("error")).lower():
+                result_warn = "پورت ۸۷۸۷ دست یک پروسهٔ دیگر است؛ نسخهٔ طلایی/عمومی را خاموش کن"
+                LOG.warning(result_warn)
+            result_extra_status = {"mcp": mcp_status}
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("MCP status failed: %s", exc)
+            result_extra_status = {}
+
         result = self.engine.process(ingest.bars, policy_in, cycle, now_ts)
+        result.extra.update(result_extra_status)
 
         # خوراک ایجنت: خلاصهٔ عددی حرکت ثانیه‌ای (تصمیم با مدل است)
         window = int(self.cfg.get("nowcast.window_s", 1200))
