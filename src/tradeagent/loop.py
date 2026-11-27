@@ -80,6 +80,19 @@ def resolve_harvester_dir(configured: Path) -> Path:
     )
     return configured
 
+def _numbers_in(text: str) -> list[float]:
+    """اعداد شبیه قیمت در یک متن (برای سنجش ادعاهای عددی مدل)."""
+    import re as _re
+
+    out = []
+    for raw in _re.findall(r"\d[\d,]*\.?\d*", text or ""):
+        try:
+            out.append(float(raw.replace(",", "")))
+        except ValueError:
+            continue
+    return out
+
+
 class Runner:
     def __init__(self, cfg: Config, cfg_path: Path | None = None) -> None:
         self.cfg = cfg
@@ -487,6 +500,30 @@ class Runner:
             if self.agent is not None:
                 trace = self.agent.run(context, skill_text=self.skill_text())
                 result.extra["agent"] = trace.as_dict()
+                # اعداد تحلیل مدل را با دادهٔ خودمان بسنج؛ عددِ ساختگی نباید در گزارش بماند
+                try:
+                    ref_bars = history.get((self.cfg.symbols or [""])[0]) or []
+                    ref_price = float(ref_bars[-1].close) if ref_bars else 0.0
+                    bad_numbers = [
+                        n for n in _numbers_in(trace.analysis) if ref_price and abs(n - ref_price) / ref_price > 0.02
+                        and n > 100
+                    ]
+                    if bad_numbers:
+                        digest = (result.extra.get("digest") or {}).get((self.cfg.symbols or [""])[0]) or {}
+                        facts = (
+                            f"last_price={digest.get('last_price', round(ref_price, 2))}، "
+                            f"spread_bps={digest.get('spread_bps')}، "
+                            f"ret_60s_bp={digest.get('ret_60s_bp')}، "
+                            f"up_frac_60s={digest.get('up_frac_60s')}"
+                        )
+                        trace.analysis = (
+                            f"⚠ اعداد تحلیل مدل ({', '.join(str(round(n, 2)) for n in bad_numbers[:3])}) "
+                            f"با داده نمی‌خواند. اعداد واقعی: {facts}"
+                        )
+                        result.warnings.append("تحلیل مدل عدد نادرست داشت؛ با اعداد واقعی جایگزین شد")
+                except Exception:  # noqa: BLE001
+                    pass
+
                 if trace.momentum:
                     result.extra["momentum"] = trace.momentum
                     symbol = (self.cfg.symbols or ["XAUUSD"])[0]

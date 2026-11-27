@@ -540,11 +540,23 @@ class ToolAgent:
         """
         if trace.momentum and trace.analysis:
             return trace
+        facts = ""
+        for rec in reversed(trace.calls):
+            if rec.ok and isinstance(rec.result, dict):
+                keep = {
+                    k: v
+                    for k, v in rec.result.items()
+                    if isinstance(v, (int, float, str)) and k not in ("symbol",)
+                }
+                if keep:
+                    facts = json.dumps(keep, ensure_ascii=False)[:600]
+                    break
         final = messages + [
             {
                 "role": "user",
                 "content": (
-                    "ابزار تمام شد. دیگر هیچ tool_calls نفرست. فقط و فقط یک آبجکت JSON بفرست با "
+                    ("FACTS (تنها اعداد مجاز — به همین‌ها استناد کن): " + facts + "\n\n" if facts else "")
+                    + "ابزار تمام شد. دیگر هیچ tool_calls نفرست. فقط و فقط یک آبجکت JSON بفرست با "
                     "کلیدهای \"analysis\" (یک جملهٔ فارسی) و \"momentum\" "
                     '{"direction":"up|down|flat","phase":"accelerating|steady|fading|reversing|unclear",'
                     '"strength":0.0-1.0,"horizon_s":5-900,"confidence":0.0-1.0,'

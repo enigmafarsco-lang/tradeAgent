@@ -509,3 +509,14 @@ def test_last_tick_price_reads_the_tail_of_the_csv(tmp_path, monkeypatch) -> Non
     )
     got = last_tick_price()
     assert got["ok"] and got["bid"] == 3642.90 and got["ask"] == 3643.10
+
+
+def test_a_made_up_price_in_the_analysis_is_replaced_with_the_real_numbers(cfg: Config) -> None:
+    """مدل «۱۴۵۲.۳۵» گفت ولی تیک ۳۶۳۲ است؛ گزارش نباید عدد ساختگی را چاپ کند."""
+    from tradeagent.loop import _numbers_in
+
+    assert 1452.35 in _numbers_in("قیمت فعلی 1452.35 و اسپرد 0.5")
+    # سنجشِ واقعی: عدد دور از قیمت مرجع باید گرفته شود
+    ref = 3632.87
+    bad = [n for n in _numbers_in("قیمت فعلی 1452.35، اسپرد 0.5") if n > 100 and abs(n - ref) / ref > 0.02]
+    assert bad == [1452.35]

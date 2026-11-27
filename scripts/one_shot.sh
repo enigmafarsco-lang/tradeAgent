@@ -93,6 +93,9 @@ if bridge == "?":
     print(f"متاتریدر: {mt5} | پل: ؟ | {hint[:90]}")
 else:
     print(f"متاتریدر: {mt5} | پل: {bridge}")
+ea = next((ln.strip() for ln in diag.splitlines() if "trade-mcp]" in ln), "")
+if ea:
+    print(f"آخرین خط اکسپرت: {ea[:110]}")
 print(f"تیک XAUUSD_i: {ticks} فایل، آخرین {age} ثانیه پیش")
 print(price_line())
 print(f"چرخه {cycle} | bars={bars} | llm={llm} | equity={equity}")
