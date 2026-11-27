@@ -71,7 +71,13 @@ if a:
           f"balance={a.get('balance')} equity={a.get('equity')}")
 if t.get("company"):
     print(f"  terminal={t.get('company')} build={t.get('build')}")
-ea = d.get("ea_log") or {}
+# لاگ را همین‌جا و تازه بخوان؛ نسخهٔ داخل فایل وضعیت ممکن است ۵ دقیقه کهنه باشد
+try:
+    from tradeagent.diag import ea_log as _fresh_ea_log
+
+    ea = _fresh_ea_log()
+except Exception:
+    ea = d.get("ea_log") or {}
 if ea.get("found"):
     if ea.get("not_allowed"):
         tag = "blocked(4014)"
@@ -92,7 +98,7 @@ if sock is False:
     print("  ! هیچ پروسه‌ای روی این آدرس گوش نمی‌دهد - مشکل پل، نه اکسپرت")
 elif sock is None:
     print("  وضعیت پل ناقص است (bridge در خروجی mt5_status نبود)؛ چند ثانیه بعد دوباره ببین")
-elif (d.get("ea_log") or {}).get("not_allowed"):
+elif ea.get("not_allowed"):
     print("  ! err=4014 یعنی «Function is not allowed for call» - متاتریدر آدرس سوکت را مجاز نمی‌داند")
     print("    Tools -> Options -> Expert Advisors -> «Allow WebRequest for listed URL»")
     print("    و اضافه کن: 127.0.0.1  (اگر نپذیرفت: http://127.0.0.1 )")
