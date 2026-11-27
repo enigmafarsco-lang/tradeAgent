@@ -250,6 +250,6 @@ def test_verify_mode_runs_one_cycle_with_mt5() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert '--verify) MODE="verify"' in script
-    assert "loop --once" in script
+    assert "loop --once --llm" in script
     cli = (root / "src" / "tradeagent" / "cli.py").read_text(encoding="utf-8")
-    assert '"--once"' in cli and "run_cycle(publish=True)" in cli
+    assert '"--once"' in cli and "force_llm" in cli

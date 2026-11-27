@@ -177,11 +177,23 @@ if [[ "$MODE" == "verify" ]]; then
   done
   rm -f var/loop.lock
 
-  "$PY" -m tradeagent --config configs/gold.toml loop --once 2>&1 | tail -40
+  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm 2>&1 | tail -40
 
   step "حکم مدل در گزارش"
-  grep -m 4 -E "جهت|فاز|قدرت|افق|اطمینان|استدلال" var/reports/latest.md 2>/dev/null | sed 's/^/  /' \
-    || dim "گزارش تازه‌ای نبود"
+  "$PY" - <<'PY'
+import pathlib, re
+
+candidates = [pathlib.Path("var/reports/latest.md"), pathlib.Path("reports/paper/latest.md")]
+path = next((p for p in candidates if p.exists()), None)
+if path is None:
+    print("  گزارشی پیدا نشد")
+else:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [ln for ln in text.splitlines() if re.search(r"جهت|فاز|قدرت|افق|اطمینان|استدلال|momentum", ln)]
+    print(f"  ({path})")
+    for ln in lines[:6] or text.splitlines()[:4]:
+        print(f"  {ln[:160]}")
+PY
 
   if (( WAS_ACTIVE )); then
     systemctl --user start tradeagent-gold.service 2>/dev/null && ok "سرویس دوباره روشن شد"

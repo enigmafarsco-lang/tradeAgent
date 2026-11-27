@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_loop = sub.add_parser("loop", help="حلقه‌ی ۵ دقیقه‌ای (production)")
     p_loop.add_argument("--interval", type=int, default=None, help="ثانیه بین چرخه‌ها (پیش‌فرض 300)")
     p_loop.add_argument("--once", action="store_true", help="فقط یک چرخه، بعد خروج (برای تست اتصال)")
+    p_loop.add_argument("--llm", action="store_true", help="مدل را حتی بدون دادهٔ تازه صدا بزن")
 
     p_demo = sub.add_parser("demo", help="اجرای نمونه با داده‌ی ساختگی، بدون متاتریدر")
     p_demo.add_argument("--cycles", type=int, default=6, help="تعداد چرخه")
@@ -124,7 +125,7 @@ def cmd_cycle(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_loop(cfg: Config, args: argparse.Namespace) -> int:
     runner = _runner(cfg)
     if getattr(args, "once", False):
-        result = runner.run_cycle(publish=True)
+        result = runner.run_cycle(publish=True, force_llm=bool(getattr(args, "llm", False)))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     return runner.run_forever(args.interval)
