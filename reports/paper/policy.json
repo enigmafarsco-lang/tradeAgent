@@ -21,25 +21,25 @@
     "risk_scale": 1.0
   },
   "next": {
-    "variant": "momentum",
+    "variant": "meanrev",
     "params": {
       "lookback_s": 300,
-      "breakout_k": 1.15,
-      "sl_atr": 1.4,
-      "rr": 1.5,
-      "hold_s": 900,
-      "min_edge_bps": 2.5,
+      "breakout_k": 1.0,
+      "sl_atr": 1.2,
+      "rr": 1.2,
+      "hold_s": 600,
+      "min_edge_bps": 1.5,
       "max_spread_bps": 5.0,
-      "cooldown_s": 360,
-      "z_entry": 2.0,
-      "max_vol_bps": 72.0
+      "cooldown_s": 240,
+      "z_entry": 1.8,
+      "max_vol_bps": 35.0
     },
-    "level": 3,
-    "generation": 4,
-    "version": 5,
-    "source": "llm",
-    "reason": "کاهش ضریب برکوت (breakout_k ↓) و سطح استاپ لایس (sl_atr ↓) برای کاهش نویز و افزایش دقت",
+    "level": 4,
+    "generation": 5,
+    "version": 6,
+    "source": "adaptive",
+    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑) • فیلتر هزینه سخت‌تر (سقف اسپرد ↓، فاصله بین ورودها ↑) • فاصله‌ی استاپ ↑ و هدف نزدیک‌تر (کاهش نویز-استاپ) • تغییر خانواده‌ی استراتژی",
     "risk_scale": 1.0
   },
-  "ts": "2026-11-27T10:09:43Z"
+  "ts": "2026-11-27T10:09:58Z"
 }
