@@ -132,3 +132,40 @@ def test_bridge_status_is_published_for_the_watcher(cfg: Config) -> None:
     assert status["ok"] is False
     assert "bind" in status["error"].lower()
     assert "owner" in status["hint"].lower()
+
+
+def test_bridge_probe_proves_the_socket_exists() -> None:
+    """«listen» در config اثبات باز بودن سوکت نیست؛ باید واقعاً connect کنیم."""
+    import socket
+    import threading
+
+    from tradeagent.loop import Runner
+
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    threading.Thread(target=lambda: srv.accept()[0].close(), daemon=True).start()
+
+    assert Runner._probe_socket(f"127.0.0.1:{port}") is True
+    srv.close()
+    assert Runner._probe_socket(f"127.0.0.1:{port}") is False
+
+
+def test_ea_log_is_read_from_the_prefix(tmp_path, monkeypatch) -> None:
+    """لاگ اکسپرت باید از خودِ متاتریدر خوانده شود، تا کاربر کپی نکند."""
+    from tradeagent.loop import Runner
+
+    logs = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs"
+    logs.mkdir(parents=True)
+    (logs / "20261127.log").write_text(
+        "2026.11.27 14:52:32\tTradeMCPConnector (XAUUSD_i,H1)\t[trade-mcp] connect to 127.0.0.1:8787 failed, err=4014\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+
+    info = Runner._ea_log()
+    assert info["found"] is True
+    assert info["refused"] is True
+    assert "err=4014" in info["last"][-1]

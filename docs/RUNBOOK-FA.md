@@ -503,3 +503,26 @@ tradeagent[…]: سیگنال 15 دریافت شد؛ پایان تمیز پس ا
 * `Experts log: <تاریخ>.log (آخرین نوشتن Ns پیش)` و دو خط آخر مربوط به trade-mcp —
   اگر خط `connect … failed, err=4014` هست، سوکت نبوده؛ اگر خط `connected` هست، وصل بوده؛
   اگر **هیچ** خط trade-mcp نیست، اکسپرت روی چارت اجرا نشده است.
+
+## اکسپرت `err=4014` می‌دهد در حالی که سرویس «فعال» است
+
+سه چیز متفاوت را از هم جدا کن (همه در `./scripts/run_gold.sh --status`):
+
+| نشانه | معنا |
+|---|---|
+| `socket=CLOSED` | هیچ پروسه‌ای روی ۸۷۸۷ گوش نمی‌دهد → پل مرده است، نه اکسپرت |
+| `socket=open` + `EA log: refused(4014)` + `same_netns=False` | متاتریدر در namespace شبکهٔ دیگری است؛ loopback مشترک نیست |
+| `socket=open` + `refused(4014)` + `same_netns=True` | سوکت هست ولی اکسپرت تلاش نمی‌کند/اجرا نشده (Algo Trading، چارت) |
+
+برای حالت دوم: در `configs/gold.toml`:
+
+```toml
+[mcp]
+bridge_host = "0.0.0.0"
+```
+
+بعد `./scripts/run_gold.sh --restart`، و در تنظیمات اکسپرت `InpHost` را IP همین کامپیوتر
+بگذار (`hostname -I`). پورت لوکال در دو namespace یکی نیست.
+
+`socket_open` با یک connect واقعی سنجیده می‌شود، و `EA log` آخرین خط خودِ متاتریدر است —
+یعنی برای تشخیص لازم نیست چیزی را کپی کنی.

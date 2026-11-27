@@ -317,9 +317,18 @@ def mcp_from_config(cfg: Any, enabled: bool | None = None) -> MCPClient:
     command = cfg.get("mcp.server_cmd", os.environ.get("TRADEAGENT_MCP_CMD", ""))
     if enabled is None:
         enabled = bool(cfg.get("mcp.enabled", bool(os.environ.get("TRADEAGENT_MCP_CMD"))))
+    # پل trade-mcp با این متغیرها bind می‌شود؛ اگر MT5 داخل Wine نتواند loopback را
+    # ببیند، با mcp.bridge_host="0.0.0.0" می‌شود همهٔ اینترفیس‌ها را گوش داد.
+    child_env = {"TRADEAGENT_MCP_CHILD": "1"}
+    host = cfg.get("mcp.bridge_host")
+    port = cfg.get("mcp.bridge_port")
+    if host:
+        child_env["TRADE_MCP_HOST"] = str(host)
+    if port:
+        child_env["TRADE_MCP_PORT"] = str(port)
     return MCPClient(
         command=command or None,
         timeout_s=float(cfg.get("mcp.timeout_s", 25.0)),
         enabled=enabled,
-        env={"TRADEAGENT_MCP_CHILD": "1"},
+        env=child_env,
     )

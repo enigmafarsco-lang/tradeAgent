@@ -93,15 +93,38 @@ print(f"  (وضعیت {age}s پیش نوشته شده)")
 b = d.get("bridge") or {}
 a = d.get("account") or {}
 t = d.get("terminal") or {}
-print(f"  bridge={b.get('listen')} ea_connected={b.get('ea_connected')} "
+sock = d.get("socket_open")
+sock_txt = {True: "open", False: "CLOSED", None: "?"}[sock]
+print(f"  bridge={b.get('listen')} socket={sock_txt} ea_connected={b.get('ea_connected')} "
       f"peer={b.get('ea_peer')} since={b.get('connected_for_seconds')}s")
 if a:
     print(f"  account={a.get('login')} server={a.get('server')} "
           f"balance={a.get('balance')} equity={a.get('equity')}")
 if t.get("company"):
     print(f"  terminal={t.get('company')} build={t.get('build')}")
-if not b.get("ea_connected"):
-    print("  اکسپرت وصل نیست: TradeMCPConnector را روی چارت XAUUSD_i بگذار و Algo Trading را روشن کن")
+ea = d.get("ea_log") or {}
+if ea.get("found"):
+    tag = "refused(4014)" if ea.get("refused") else ("connected" if ea.get("connected") else "no-line")
+    print(f"  EA log: {tag} · {ea.get('age_s')}s پیش · {pathlib.Path(ea.get('file','')).name}")
+    for line in (ea.get("last") or [])[-1:]:
+        print(f"    {line[:150]}")
+else:
+    print("  EA log: پیدا نشد (MT5_WINEPREFIX را چک کن)")
+
+mt5 = d.get("mt5") or {}
+if sock is False:
+    print("  ! هیچ پروسه‌ای روی این آدرس گوش نمی‌دهد - مشکلات پل، نه اکسپرت")
+elif not b.get("ea_connected"):
+    same = mt5.get("same_netns")
+    if same is False:
+        print("  ! متاتریدر در network namespace دیگری است؛ loopback مشترک نیست.")
+        print("    راه‌حل: در configs/gold.toml زیر [mcp] این را اضافه کن:  bridge_host = \"0.0.0.0\"")
+        print("    و در تنظیمات اکسپرت InpHost را IP همین کامپیوتر بگذار (hostname -I).")
+    elif mt5.get("pids"):
+        print("  سوکت باز است و متاتریدر هم همان namespace است، ولی اکسپرت جواب نمی‌دهد:")
+        print("    در متاتریدر TradeMCPConnector را روی چارت XAUUSD_i بگذار و Algo Trading را روشن کن")
+    else:
+        print("  اکسپرت وصل نیست: TradeMCPConnector را روی چارت XAUUSD_i بگذار و Algo Trading را روشن کن")
 PY
 }
 

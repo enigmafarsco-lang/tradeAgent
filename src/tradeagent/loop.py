@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import signal
 import time
 import os
@@ -171,6 +172,74 @@ class Runner:
 
         return {"local_tick_digest": local_tick_digest, "local_candles": local_candles}
 
+    @staticmethod
+    def _probe_socket(address: str) -> bool:
+        """آیا واقعاً کسی روی همان آدرسِ پل گوش می‌دهد؟ (نوشتن «listen» در config اثبات نیست)"""
+        try:
+            host, _, port = str(address).rpartition(":")
+            with socket.create_connection((host or "127.0.0.1", int(port)), timeout=2):
+                return True
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _mt5_netns() -> dict[str, Any]:
+        """آیا متاتریدر در همان network namespace ماست؟ (اگر نه، loopback مشترک نیست)"""
+        import os
+
+        pids = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmd = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            except OSError:
+                continue
+            if "terminal64.exe" in cmd:
+                pids.append(entry.name)
+        if not pids:
+            return {"pids": [], "same_netns": None}
+        same = []
+        for pid in pids[:3]:
+            try:
+                same.append(
+                    os.stat(f"/proc/{pid}/ns/net").st_ino == os.stat("/proc/self/ns/net").st_ino
+                )
+            except OSError:
+                same.append(None)
+        verdict = None if all(v is None for v in same) else all(same)
+        return {"pids": pids[:3], "same_netns": verdict}
+
+    @staticmethod
+    def _ea_log() -> dict[str, Any]:
+        """متاتریدر خودش می‌گوید چه خبر است؛ لاگش را بخوان تا کاربر کپی نکند."""
+        import os
+
+        prefix = Path(os.environ.get("MT5_WINEPREFIX") or (Path.home() / "Wine")) / "drive_c"
+        patterns = (
+            "Program Files/MetaTrader 5/MQL5/Logs/*.log",
+            "Program Files/MetaTrader 5/logs/*.log",
+            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/MQL5/Logs/*.log",
+            "users/*/AppData/Roaming/MetaQuotes/Terminal/*/logs/*.log",
+        )
+        files = [f for pat in patterns for f in prefix.glob(pat)]
+        if not files:
+            return {"found": False}
+        newest = max(files, key=lambda f: f.stat().st_mtime)
+        try:
+            lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return {"found": False}
+        ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
+        return {
+            "found": True,
+            "file": str(newest),
+            "age_s": int(time.time() - newest.stat().st_mtime),
+            "last": ea[-2:],
+            "refused": any("err=4014" in ln for ln in ea[-6:]),
+            "connected": any("connected" in ln.lower() for ln in ea[-6:]),
+        }
+
     def publish_mcp_status(self) -> dict[str, Any]:
         """وضعیت پل متاتریدر را در یک فایل بنویس.
 
@@ -182,6 +251,9 @@ class Runner:
             try:
                 raw = self.mcp.call_tool("mt5_status")
                 if isinstance(raw, dict):
+                    bridge = raw.get("bridge") or {}
+                    if bridge.get("listen"):
+                        status["socket_open"] = self._probe_socket(bridge["listen"])
                     status.update(
                         {
                             "ok": bool(raw.get("ok")),
@@ -200,6 +272,8 @@ class Runner:
                         "port 8787 already has an owner (another trade-mcp/loop); only one "
                         "process can host the bridge - stop the other one"
                     )
+        status["mt5"] = self._mt5_netns()
+        status["ea_log"] = self._ea_log()
         try:
             write_json(self.state_dir / "mcp_status.json", status)
         except OSError:
