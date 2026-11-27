@@ -34,7 +34,7 @@ timeout_s = 25.0
 max_rounds = 3
 max_calls = 6
 skill_prompt = "gold_session_briefing"
-skill_symbol = "XAUUSD"
+skill_symbol = "XAUUSD_i"
 
 [nowcast]
 enabled = true

@@ -87,6 +87,9 @@ Rules:
 - Ordering/execution tools are disabled: this system is paper-only.
 - Prefer local_* tools (they read our own tick files) when MT5 tools answer
   'not_connected'. You always have tick data, so you can always judge momentum.
+- The account trades exactly one instrument: "only_trade_this_symbol" in the context. Pass that
+  string to every tool (never a shorter alias like XAUUSD if the context says XAUUSD_i), and if
+  a tool returns prices that do not match "tick_digest.last_price", trust tick_digest and say so.
 - Numbers ending in _bp are basis points: 1 bp = 0.01 percent. Say "12 bp", never "12 percent".
   Quote the tool numbers as they are; do not rescale them.
 - "analysis" is ONE string (never an object), in Persian, not English.

@@ -439,3 +439,16 @@ def test_opposite_verdict_flips_the_position(cfg: Config) -> None:
     )
     assert act.get("closed"), "پوزیشن قبلی باید بسته شود"
     assert act["action"] == "open" and act["side"] == -1
+
+
+def test_model_context_names_the_only_instrument(cfg: Config) -> None:
+    """مدل باید بداند تنها نماد معاملاتی XAUUSD_i است، وگرنه «XAUUSD» می‌پرسد و عدد دیگری می‌گیرد."""
+    runner = Runner(cfg)
+    cycles = getattr(runner, "store", None)
+    assert cycles is not None
+    result = runner.engine.process(
+        {"XAUUSD_i": _bars("XAUUSD_i", 360)}, runner.current_policy(), 1, now_ts=1_700_000_400
+    )
+    ctx = runner.build_llm_context(result, runner.current_policy())
+    assert ctx["only_trade_this_symbol"] == cfg.symbols[0]
+    assert ctx["only_trade_this_symbol"] in ctx["symbols"]

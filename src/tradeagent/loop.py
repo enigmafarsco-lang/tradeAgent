@@ -350,6 +350,8 @@ class Runner:
                 }
             )
         return {
+            "symbols": list(self.cfg.symbols),
+            "only_trade_this_symbol": (self.cfg.symbols or [""])[0],
             "cycle": result.cycle,
             "equity": result.equity,
             "balance": result.balance,
