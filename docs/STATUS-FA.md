@@ -90,6 +90,15 @@
 (جداکردن فوری + کامنت‌کردن `vfio` در `modprobe.d` + حذف `vfio-pci.ids` از grub،
 با نسخهٔ پشتیبان) و سپس ریبوت.
 
+## وضعیت فعلی GPU
+
+* سرویس کاربری ollama فعال است، `OLLAMA_VULKAN=1` و `OLLAMA_IGPU_ENABLE=1` هم در
+  متغیرهای خود پروسه دیده می‌شوند، ولی `/api/ps` می‌گوید `size_vram = 0` → CPU.
+* NVIDIA: کرنل `7.0.0-44`, ماژول امضاشده روی دیسک (595.99.02)، ولی بار نمی‌شود؛
+  آخرین حکم `vfio-pci` بود.
+* راه واحد: `./scripts/fix_gpu.sh` که به ترتیب NVIDIA → Vulkan را امتحان می‌کند و اگر
+  نشد، خط تشخیص خود Ollama (`inference compute … library=…`) را چاپ می‌کند.
+
 ## نگهبان ضبط (watchdog)
 
 `scripts/watch_harvester.sh` ضربان `status.json` و تازه‌ترین فایل تیک را می‌سنجد:
