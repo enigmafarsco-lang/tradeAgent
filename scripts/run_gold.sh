@@ -4,6 +4,7 @@
 #
 #   ./scripts/run_gold.sh            # سرویس طلا را نصب/فعال کن (جای سرویس عمومی)
 #   ./scripts/run_gold.sh --status   # چه چیزی الان در حال اجراست
+#   ./scripts/run_gold.sh --restart  # بعد از git pull: کد تازه را بارگذاری کن
 #   ./scripts/run_gold.sh --revert   # برگرد به سرویس عمومی (configs/local.toml)
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -13,6 +14,7 @@ INTERVAL="${INTERVAL:-300}"
 MODE="enable"
 case "${1:-}" in
   --status) MODE="status" ;;
+  --restart) MODE="restart" ;;
   --revert) MODE="revert" ;;
   -h|--help) sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
@@ -98,6 +100,28 @@ ensure_env() {
   grep -q '^TRADEAGENT_OLLAMA_URL=' .env || echo 'TRADEAGENT_OLLAMA_URL=http://127.0.0.1:11434' >> .env
   dim "provider=ollama (روی GPU محلی)"
 }
+
+if [[ "$MODE" == "restart" ]]; then
+  step "بارگذاری کد تازه"
+  systemctl --user restart tradeagent-gold.service 2>/dev/null || {
+    bad "سرویس نصب/فعال نیست؛ اول ./scripts/run_gold.sh را بزن"
+    exit 1
+  }
+  ok "tradeagent-gold.service ری‌استارت شد (پل و اکسپرت از نو وصل می‌شوند)"
+  START_STAMP="$(date +%s)"
+  for _ in $(seq 1 12); do
+    sleep 5
+    systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 || { bad "سرویس بالا نیامد"; exit 1; }
+    F="$(status_file)"
+    if [[ -n "$F" ]] && (( $(stat -c %Y "$F" 2>/dev/null || echo 0) >= START_STAMP - 5 )); then
+      ok "کد تازه در حال اجراست"
+      show_bridge
+      exit 0
+    fi
+  done
+  warn "ری‌استارت شد ولی وضعیت پل هنوز تازه نشده (چرخهٔ اول شاید مشغول مدل است)"
+  exit 0
+fi
 
 if [[ "$MODE" == "status" ]]; then
   status

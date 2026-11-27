@@ -200,3 +200,20 @@ def test_run_gold_finds_status_file_where_the_loop_writes_it() -> None:
     assert "status_file()" in body
     assert "var/mcp_status.json var/state/mcp_status.json" in body
     assert "ea_connected" in body
+
+
+def test_contract_asks_the_model_for_a_momentum_verdict() -> None:
+    """حکم تکانه باید صریح در قرارداد باشد، نه شانسی از متن skill."""
+    from tradeagent.agent import CONTRACT
+
+    for key in ("momentum", "accelerating", "fading", "horizon_s", "strength"):
+        assert key in CONTRACT, key
+    assert "Persian" in CONTRACT and "فارسی" in CONTRACT
+
+
+def test_run_gold_has_a_restart_mode() -> None:
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert '--restart) MODE="restart"' in body
+    assert "systemctl --user restart tradeagent-gold.service" in body
