@@ -44,14 +44,16 @@ done
 mkdir -p "$HOME/.local/share/applications"
 if [[ "$MODE" == watch ]]; then
   NAME="MetaTrader (نگهبان)"
+  BASE="tradeagent-mt5-watch"
   EXEC="$ROOT/scripts/start_mt5.sh --watch"
   TERM=true
 else
   NAME="MetaTrader"
+  BASE="tradeagent-mt5"
   EXEC="$ROOT/scripts/start_mt5.sh"
   TERM=false
 fi
-FILE="$HOME/.local/share/applications/tradeagent-mt5.desktop"
+FILE="$HOME/.local/share/applications/${BASE:-tradeagent-mt5}.desktop"
 
 cat > "$FILE" <<EOF
 [Desktop Entry]
@@ -71,17 +73,17 @@ ok "ساخته شد: $FILE"
 placed=()
 for dir in "$HOME/Desktop" "$HOME/دسکتاپ"; do
   [[ -d "$dir" ]] || continue
-  cp "$FILE" "$dir/tradeagent-mt5.desktop"
-  chmod +x "$dir/tradeagent-mt5.desktop"
-  gio set "$dir/tradeagent-mt5.desktop" metadata::trusted true 2>/dev/null || true
-  placed+=("$dir/tradeagent-mt5.desktop")
+  cp "$FILE" "$dir/$(basename "$FILE")"
+  chmod +x "$dir/$(basename "$FILE")"
+  gio set "$dir/$(basename "$FILE")" metadata::trusted true 2>/dev/null || true
+  placed+=("$dir/$(basename "$FILE")")
 done
 if [[ ${#placed[@]} -eq 0 ]]; then
   mkdir -p "$HOME/Desktop"
-  cp "$FILE" "$HOME/Desktop/tradeagent-mt5.desktop"
-  chmod +x "$HOME/Desktop/tradeagent-mt5.desktop"
-  gio set "$HOME/Desktop/tradeagent-mt5.desktop" metadata::trusted true 2>/dev/null || true
-  placed+=("$HOME/Desktop/tradeagent-mt5.desktop")
+  cp "$FILE" "$HOME/Desktop/$(basename "$FILE")"
+  chmod +x "$HOME/Desktop/$(basename "$FILE")"
+  gio set "$HOME/Desktop/$(basename "$FILE")" metadata::trusted true 2>/dev/null || true
+  placed+=("$HOME/Desktop/$(basename "$FILE")")
 fi
 for f in "${placed[@]}"; do ok "روی دسکتاپ: $f"; done
 
