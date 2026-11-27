@@ -188,6 +188,24 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
         lines.append("_داده‌ی ورودی در این چرخه ثبت نشد (هیچ نمادی خوانده نشد)._")
     lines.append("")
 
+    # پیش‌بینی روند از تیک ثانیه
+    nc = result.extra.get("nowcast") or {}
+    if isinstance(nc, dict) and nc:
+        lines.append("**پیش‌بینی روند (nowcast از حرکت ثانیه‌ای):**")
+        lines.append("")
+        lines.append("| نماد | p(up) | انتظار | دقت آزمون | نمونه | افق |")
+        lines.append("|---|---|---|---|---|---|")
+        for sym, item in list(nc.items())[:10]:
+            samples = item.get("samples") or {}
+            lines.append(
+                f"| {sym} | {item.get('prob_up', 0.5):.2f} | {item.get('expected_bps', 0):+.1f}bp | "
+                f"{item.get('hit_rate', 0):.0%} | {samples.get('test', 0)} | {item.get('horizon_s', 0)}s |"
+            )
+        lines.append("")
+        lines.append("_دقت روی نمونهٔ آزمون است (آموزش روی گذشته، آزمون روی ادامهٔ همان سری)؛ "
+                     "۵۰٪ یعنی مدل چیزی یاد نگرفته._")
+        lines.append("")
+
     # ۶) مدل زبانی
     lines.append("## ۶) مدل زبانی")
     lines.append("")

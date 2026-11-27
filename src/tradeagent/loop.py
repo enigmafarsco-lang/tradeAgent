@@ -17,6 +17,7 @@ from .features import compute_features
 from .agent import ToolAgent
 from .llm import LLMAdvisor, LLMResult
 from .mcp_client import mcp_from_config
+from .nowcast import nowcast_symbols
 from .paper import CycleResult, PaperEngine, Store
 from .policy import (AdaptiveController, Decision, baseline_params, describe, new_policy,
                      sanitize_for_log, validate_proposal)
@@ -195,6 +196,7 @@ class Runner:
                 for t in result.extra.get("recent_trades", [])[:8]
             ],
             "market": market,
+            "nowcast": result.extra.get("nowcast", {}),
             "open_positions": len(result.open_positions),
             "data_warnings": result.warnings[:6],
             "instruction": "Only JSON. variant + params within 20%. Never change risk/limits.",
@@ -224,6 +226,19 @@ class Runner:
             ingest = source.fetch(now_s=now_ts)
 
         result = self.engine.process(ingest.bars, policy_in, cycle, now_ts)
+
+        # پیش‌بینی روند از حرکت ثانیه‌ای (برای مدل و گزارش)
+        if bool(self.cfg.get("nowcast.enabled", True)):
+            horizon = int(self.cfg.get("nowcast.horizon_s", 60))
+            window = int(self.cfg.get("nowcast.window_s", 1200))
+            history = {
+                sym: self.store.recent_bars(sym, window)
+                for sym in (ingest.bars.keys() or self.cfg.symbols)
+            }
+            try:
+                result.extra["nowcast"] = nowcast_symbols(history, horizon_s=horizon, window_s=window)
+            except Exception as exc:  # noqa: BLE001 - پیش‌بینی نباید چرخه را بکشد
+                result.warnings.append(f"nowcast محاسبه نشد: {type(exc).__name__}: {exc}")
         result.source = ingest.source
         result.ingest = [info.as_dict() for info in ingest.per_symbol.values()]
         result.previous_policy = prev_policy

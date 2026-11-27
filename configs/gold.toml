@@ -36,6 +36,11 @@ max_calls = 6
 skill_prompt = "gold_session_briefing"
 skill_symbol = "XAUUSD"
 
+[nowcast]
+enabled = true
+horizon_s = 60
+window_s = 900
+
 [publish]
 enabled = true
 branch = "reports"
