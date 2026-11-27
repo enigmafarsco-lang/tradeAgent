@@ -62,6 +62,8 @@ a = d.get("account") or {}
 t = d.get("terminal") or {}
 sock = d.get("socket_open")
 sock_txt = {True: "open", False: "CLOSED", None: "?"}[sock]
+if not b.get("listen") and d.get("error"):
+    print(f"  ! mt5_status چیزی برنگرداند: {str(d.get('error'))[:120]}")
 print(f"  bridge={b.get('listen')} socket={sock_txt} ea_connected={b.get('ea_connected')} "
       f"peer={b.get('ea_peer')} since={b.get('connected_for_seconds')}s")
 if a:
@@ -80,7 +82,9 @@ else:
 
 mt5 = d.get("mt5") or {}
 if sock is False:
-    print("  ! هیچ پروسه‌ای روی این آدرس گوش نمی‌دهد - مشکلات پل، نه اکسپرت")
+    print("  ! هیچ پروسه‌ای روی این آدرس گوش نمی‌دهد - مشکل پل، نه اکسپرت")
+elif sock is None:
+    print("  وضعیت پل ناقص است (bridge در خروجی mt5_status نبود)؛ چند ثانیه بعد دوباره ببین")
 elif not b.get("ea_connected"):
     same = mt5.get("same_netns")
     if same is False:

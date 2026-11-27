@@ -243,7 +243,21 @@ class Runner:
         if self.mcp and self.mcp.enabled:
             try:
                 raw = self.mcp.call_tool("mt5_status")
-                if isinstance(raw, dict):
+                # برخی نسخه‌های MCP خروجی را در {"result": {...}} می‌پیچند
+                if isinstance(raw, dict) and "bridge" not in raw and isinstance(raw.get("result"), dict):
+                    raw = raw["result"]
+                if isinstance(raw, str):
+                    try:
+                        import json as _json
+
+                        parsed = _json.loads(raw)
+                        if isinstance(parsed, dict):
+                            raw = parsed
+                    except ValueError:
+                        pass
+                if isinstance(raw, str):
+                    status.update({"ok": False, "error": raw[:200]})
+                elif isinstance(raw, dict):
                     bridge = raw.get("bridge") or {}
                     if bridge.get("listen"):
                         status["socket_open"] = self._probe_socket(bridge["listen"])

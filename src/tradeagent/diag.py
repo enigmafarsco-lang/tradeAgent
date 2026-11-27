@@ -40,6 +40,31 @@ def read_log(path: Path) -> list[str]:
     return text.splitlines()
 
 
+def data_dirs_from_process() -> list[Path]:
+    """پوشهٔ داده را از فایل‌های بازی که خود ترمینال نگه داشته پیدا کن.
+
+    متاتریدر لاگ روزِ جاری را هنگام کار باز نگه می‌دارد، پس ``/proc/<pid>/fd``
+    مسیر واقعی پوشهٔ داده را لو می‌دهد — حتی وقتی جای غیرمنتظره‌ای نصب شده باشد.
+    """
+    dirs: set[Path] = set()
+    for pid in mt5_pids():
+        base = Path("/proc") / pid / "fd"
+        try:
+            entries = list(base.iterdir())
+        except OSError:
+            continue
+        for e in entries:
+            try:
+                target = Path(os.readlink(e))
+            except OSError:
+                continue
+            if target.suffix != ".log":
+                continue
+            if "MQL5" in str(target) or "MetaQuotes" in str(target) or "MetaTrader" in str(target):
+                dirs.add(target.parent)
+    return sorted(dirs)
+
+
 def candidate_logs(extra_dirs: Iterable[str | Path] = ()) -> list[Path]:
     """فایل‌های لاگ محتمل، تازه‌ترین اول؛ جست‌وجوی بازگشتی هم دارد ولی محدود."""
     root = prefix()
@@ -55,6 +80,8 @@ def candidate_logs(extra_dirs: Iterable[str | Path] = ()) -> list[Path]:
         d = Path(extra)
         if d.is_dir():
             found.update(d.glob("*.log"))
+    for d in data_dirs_from_process():  # از خود ترمینال در حال اجرا
+        found.update(d.glob("*.log"))
     if not found:  # نصب در مسیر غیرمنتظره: جست‌وجوی محدود
         now = time.time()
         scanned = 0
@@ -73,19 +100,51 @@ def candidate_logs(extra_dirs: Iterable[str | Path] = ()) -> list[Path]:
     return sorted(found, key=lambda f: f.stat().st_mtime, reverse=True)
 
 
+NOTICE_KEYS = (
+    "automated trading is disabled",
+    "automated trading is enabled",
+    "expert is disabled",
+    "not allowed",
+    "expert ... removed",
+    " removed",
+    "deinitialized",
+)
+
+
+def journal_notices(limit: int = 3) -> list[str]:
+    """آخرین اعلان‌های خودِ ترمینال (مثلاً «automated trading is disabled»)."""
+    files = candidate_logs()
+    if not files:
+        return []
+    # Journal همان فایلی است که خطوط اکسپرت را ندارد ولی پرنوشت است
+    for f in files:
+        lines = read_log(f)
+        hits = [
+            ln
+            for ln in lines
+            if any(k in ln.lower() for k in ("automated trading", "expert is disabled", "not allowed"))
+            or ("expert" in ln.lower() and "removed" in ln.lower())
+        ]
+        if hits:
+            return hits[-limit:]
+    return []
+
+
 def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
     files = candidate_logs(extra_dirs)
     if not files:
         return {"found": False}
-    best: tuple[float, Path, list[str]] | None = None
+    best: tuple[tuple[int, float], Path, list[str]] | None = None
     for f in files:
         lines = read_log(f)
         ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
         if not ea:
             continue
-        m = f.stat().st_mtime
-        if best is None or m > best[0]:
-            best = (m, f, ea)
+        # خطوط خودِ اکسپرت («[trade-mcp] …») از «expert … loaded» ژورنال ارزشمندترند
+        own = [ln for ln in ea if "[trade-mcp]" in ln.lower()]
+        key = (1 if own else 0, f.stat().st_mtime)
+        if best is None or key > best[0]:
+            best = (key, f, ea)
     if best is None:
         newest = files[0]
         return {
@@ -97,7 +156,7 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
             "connected": False,
             "no_line": True,
         }
-    m, f, ea = best
+    (_, m), f, ea = best
     return {
         "found": True,
         "file": str(f),
@@ -140,3 +199,5 @@ def report() -> None:
         print(f"    {line[:150]}")
     if info.get("no_line"):
         print("    (هیچ خط trade-mcp در هیچ فایل لاگی نبود: اکسپرت روی چارت اجرا نشده)")
+    for note in journal_notices(2):
+        print(f"  اعلان متاتریدر: {note[:140]}")

@@ -557,3 +557,16 @@ bridge_host = "0.0.0.0"
   Experts log: users/joshua/AppData/.../MQL5/Logs/20261127.log (آخرین نوشتن 12s پیش)
     2026.11.27 14:54:15  TradeMCPConnector  [trade-mcp] connected
 ```
+
+## وقتی اکسپرت «loaded» است ولی دیگر هیچ چیز نمی‌گوید
+
+در ژورنال متاتریدر دنبال این خط‌ها بگرد (حالا `--status` خودش چاپ می‌کند):
+
+```
+Experts  automated trading is disabled
+Experts  expert ... removed
+Experts  expert ... is disabled
+```
+
+اگر آخرین اعلان «disabled» باشد، اکسپرت لود شده ولی اجرا نمی‌شود — دکمهٔ Algo Trading
+نوار ابزار و تیک «Allow Algo Trading» در تنظیمات خود اکسپرت را روشن کن.

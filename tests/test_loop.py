@@ -221,3 +221,16 @@ def test_diag_finds_logs_deep_inside_the_prefix(tmp_path, monkeypatch) -> None:
     )
     info = ea_log()
     assert info["found"] is True and info["connected"] is True
+
+
+def test_diag_surfaces_terminal_notices(tmp_path, monkeypatch) -> None:
+    """«automated trading is disabled» باید دیده شود، نه اینکه حدس بزنیم."""
+    from tradeagent.diag import journal_notices
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    journal = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "logs"
+    journal.mkdir(parents=True)
+    (journal / "20261127.log").write_text(
+        "GH 0 14:55:01.000 Experts automated trading is disabled\n", encoding="utf-8"
+    )
+    assert any("automated trading is disabled" in n for n in journal_notices())
