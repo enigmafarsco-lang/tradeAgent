@@ -64,6 +64,8 @@ Rules:
 - You may call at most %(max_calls)d tools in total; batch independent ones in one reply.
 - Change at most 20%% of any parameter, never touch risk or leverage.
 - Ordering/execution tools are disabled: this system is paper-only.
+- Prefer local_* tools (they read our own tick files) when MT5 tools answer
+  'not_connected'. You always have tick data, so you can always judge momentum.
 - If the data is insufficient (closed market, wide spread), say so in "analysis" and
   return "proposal": null.
 """
@@ -155,24 +157,50 @@ class ToolAgent:
         max_rounds: int = 3,
         max_calls: int = 6,
         blocked: set[str] | None = None,
+        local_tools: dict[str, Callable[..., Any]] | None = None,
     ) -> None:
         self.chat = chat
         self.mcp = mcp
+        # ابزارهای محلی: از تیک‌های خودمان، بدون نیاز به متاتریدر/MCP
+        self.local_tools: dict[str, Callable[..., Any]] = dict(local_tools or {})
         self.allow = list(allow or DEFAULT_ALLOW)
         self.blocked = set(blocked or BLOCKED_TOOLS)
         self.max_rounds = max(1, int(max_rounds))
         self.max_calls = max(0, int(max_calls))
 
     # -- ابزارها --------------------------------------------------------
+    LOCAL_TOOL_SPECS = {
+        "local_tick_digest": {
+            "description": "Numbers from the last seconds of ticks: returns per window, velocity change, up-tick fraction, spread, last closes.",
+            "args": {"symbol": {"type": "string", "required": False}},
+        },
+        "local_candles": {
+            "description": "Aggregated OHLC from our own tick files (seconds=1,5,15,60) with count.",
+            "args": {
+                "symbol": {"type": "string", "required": False},
+                "seconds": {"type": "integer", "required": False},
+                "count": {"type": "integer", "required": False},
+            },
+        },
+    }
+
+    def _local_specs(self) -> list[dict[str, Any]]:
+        return [
+            {"name": name, "description": spec["description"], "args": spec["args"]}
+            for name, spec in self.LOCAL_TOOL_SPECS.items()
+            if name in self.local_tools
+        ]
+
     def available_tools(self) -> list[dict[str, Any]]:
+        local = self._local_specs()
         if self.mcp is None:
-            return []
+            return local
         try:
             tools = self.mcp.tools_for_prompt(allow=[t for t in self.allow if t not in self.blocked])
         except Exception as exc:  # noqa: BLE001 - هر خطای سرور نباید چرخه را بکشد
             LOG.warning("listing MCP tools failed: %s", exc)
-            return []
-        return tools
+            tools = []
+        return local + tools
 
     def _execute(self, call: dict[str, Any], budget: int) -> ToolCallRecord | None:
         name = str(call.get("tool") or call.get("name") or "").strip()
@@ -181,6 +209,24 @@ class ToolAgent:
             args = {}
         if not name:
             return None
+        if name in self.local_tools:
+            if budget <= 0:
+                return ToolCallRecord(tool=name, arguments=args, ok=False, error="سقف فراخوانی ابزار پر شد")
+            import time
+
+            started = time.time()
+            try:
+                result = self.local_tools[name](**args)
+                return ToolCallRecord(
+                    tool=name, arguments=args, ok=True, result=result,
+                    elapsed_ms=int((time.time() - started) * 1000),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return ToolCallRecord(
+                    tool=name, arguments=args, ok=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                    elapsed_ms=int((time.time() - started) * 1000),
+                )
         if name in self.blocked or name not in self.allow:
             return ToolCallRecord(
                 tool=name,

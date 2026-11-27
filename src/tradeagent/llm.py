@@ -92,12 +92,15 @@ class LLMAdvisor:
         self.enabled = bool(cfg.get("llm.enabled", True))
         self.provider = str(cfg.get("llm.provider", "none") or "none").lower()
         self.model = str(cfg.get("llm.model", "gemini-3.8-flash"))
-        if not is_text_model(self.model):
+        self.ollama_model = str(cfg.get("llm.ollama_model", "qwen2.5:7b-instruct"))
+        # فقط مدلِ همان provider اهمیت دارد؛ هشدار مدل gemini روی حالت ollama گمراه‌کننده بود
+        if self.provider == "gemini" and not is_text_model(self.model):
             LOG.warning(
                 "مدل %s متنی نیست (گفتار/تصویر)؛ ./scripts/setup_llm.sh مدل متنی انتخاب می‌کند",
                 self.model,
             )
-        self.ollama_model = str(cfg.get("llm.ollama_model", "qwen2.5:7b-instruct"))
+        if self.provider == "ollama" and not is_text_model(self.ollama_model):
+            LOG.warning("مدل ollama «%s» متنی نیست؛ یک مدل متنی بگذار", self.ollama_model)
         self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
         self.timeout = float(cfg.get("llm.timeout_s", 45))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))

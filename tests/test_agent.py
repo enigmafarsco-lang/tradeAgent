@@ -93,3 +93,33 @@ def test_non_json_reply_is_reported() -> None:
     trace = ToolAgent(chat=lambda m: "I think gold goes up", mcp=FakeMCP()).run({})
     assert trace.proposal is None
     assert "JSON" in trace.error
+
+
+def test_local_tools_are_offered_and_usable() -> None:
+    """بدون MT5 هم ایجنت باید ابزار محلی داشته باشد."""
+    from tradeagent.agent import ToolAgent
+
+    calls = []
+
+    def local_tick_digest(symbol=None, **_kw):
+        calls.append(symbol)
+        return {"ret_15s_bp": 3.5, "up_frac_30s": 0.6}
+
+    replies = [
+        json.dumps({"analysis": "خواندن تیک", "tool_calls": [{"tool": "local_tick_digest", "arguments": {"symbol": "XAUUSD_i"}}], "proposal": None}),
+        json.dumps({"analysis": "شتاب مثبت", "momentum": {"direction": "up", "phase": "accelerating", "strength": 0.5, "horizon_s": 60, "confidence": 0.6},
+                    "tool_calls": [], "proposal": {"variant": "momentum", "params": {"breakout_k": 1.1}, "confidence": 0.6}}),
+    ]
+    seen = {"n": 0}
+
+    def chat(messages):  # noqa: ANN001
+        seen["n"] += 1
+        return replies[seen["n"] - 1]
+
+    agent = ToolAgent(chat=chat, mcp=None, local_tools={"local_tick_digest": local_tick_digest})
+    assert [t["name"] for t in agent.available_tools()] == ["local_tick_digest"]
+    trace = agent.run({"cycle": 1})
+    assert calls == ["XAUUSD_i"]
+    assert trace.calls[0].ok is True
+    assert trace.momentum["direction"] == "up"
+    assert trace.proposal["params"]["breakout_k"] == 1.1

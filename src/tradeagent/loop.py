@@ -17,7 +17,7 @@ from .features import compute_features
 from .agent import ToolAgent
 from .llm import LLMAdvisor, LLMResult
 from .mcp_client import mcp_from_config
-from .nowcast import ForecastLedger, digests_for
+from .nowcast import ForecastLedger, digests_for, tick_digest
 from .paper import CycleResult, PaperEngine, Store
 from .policy import (AdaptiveController, Decision, baseline_params, describe, new_policy,
                      sanitize_for_log, validate_proposal)
@@ -104,6 +104,7 @@ class Runner:
             self.agent = ToolAgent(
                 chat=self.advisor.chat,
                 mcp=self.mcp,
+                local_tools=self._local_tools(),
                 allow=list(allow) if isinstance(allow, list) else None,
                 max_rounds=int(cfg.get("agent.max_rounds", 3)),
                 max_calls=int(cfg.get("agent.max_calls", 6)),
@@ -132,6 +133,43 @@ class Runner:
             state_path=self.state_dir / "ingest_state.json",
             stale_after_s=float(self.cfg.get("data.stale_after_s", 180)),
         )
+
+    def _local_tools(self) -> dict[str, Any]:
+        """ابزارهای محلی روی تیک‌های خودمان: بدون MT5 هم ایجنت داده دارد."""
+        def _bars(symbol: str | None = None, seconds: int = 1, count: int = 60) -> list:
+            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            horizon = max(30, int(seconds) * max(1, int(count)))
+            return self.store.recent_bars(sym, horizon)
+
+        def local_tick_digest(symbol: str | None = None, **_kw: Any) -> dict:
+            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            return tick_digest(self.store.recent_bars(sym, 1200))
+
+        def local_candles(symbol: str | None = None, seconds: int = 5, count: int = 12, **_kw: Any) -> dict:
+            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            bars = self.store.recent_bars(sym, max(120, int(seconds) * int(count) * 2))
+            if not bars:
+                return {"symbol": sym, "error": "بدون کندل (فید قطع است)"}
+            step = max(1, int(seconds))
+            out = []
+            chunk: list = []
+            for bar in bars:
+                chunk.append(bar)
+                if len(chunk) == step:
+                    out.append(
+                        {
+                            "t": chunk[0].t,
+                            "open": round(chunk[0].open, 6),
+                            "high": round(max(b.high for b in chunk), 6),
+                            "low": round(min(b.low for b in chunk), 6),
+                            "close": round(chunk[-1].close, 6),
+                            "ticks": sum(b.ticks for b in chunk),
+                        }
+                    )
+                    chunk = []
+            return {"symbol": sym, "seconds": step, "candles": out[-int(count):]}
+
+        return {"local_tick_digest": local_tick_digest, "local_candles": local_candles}
 
     def skill_text(self) -> str:
         """متن مهارت آماده از trade-mcp (مثلاً gold_session_briefing)."""
