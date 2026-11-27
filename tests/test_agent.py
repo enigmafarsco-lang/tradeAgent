@@ -241,3 +241,15 @@ def test_mt5_logs_are_looked_for_in_both_layouts() -> None:
     assert "Program Files/MetaTrader 5/MQL5/Logs/*.log" in body
     watch = (Path(__file__).resolve().parents[1] / "scripts" / "connect_trade_mcp.sh").read_text(encoding="utf-8")
     assert "from tradeagent.diag import ea_log" in watch
+
+
+def test_verify_mode_runs_one_cycle_with_mt5() -> None:
+    """بعد از اتصال، باید بتوان بدون انتظار ۵ دقیقه یک چرخهٔ واقعی دید."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert '--verify) MODE="verify"' in script
+    assert "loop --once" in script
+    cli = (root / "src" / "tradeagent" / "cli.py").read_text(encoding="utf-8")
+    assert '"--once"' in cli and "run_cycle(publish=True)" in cli

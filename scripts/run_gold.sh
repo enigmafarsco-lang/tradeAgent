@@ -5,6 +5,7 @@
 #   ./scripts/run_gold.sh            # سرویس طلا را نصب/فعال کن (جای سرویس عمومی)
 #   ./scripts/run_gold.sh --status   # چه چیزی الان در حال اجراست
 #   ./scripts/run_gold.sh --restart  # بعد از git pull: کد تازه را بارگذاری کن
+#   ./scripts/run_gold.sh --verify   # یک چرخهٔ واقعی همین حالا با MT5 اجرا و نشان بده
 #   ./scripts/run_gold.sh --revert   # برگرد به سرویس عمومی (configs/local.toml)
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -18,6 +19,7 @@ MODE="enable"
 case "${1:-}" in
   --status) MODE="status" ;;
   --restart) MODE="restart" ;;
+  --verify) MODE="verify" ;;
   --revert) MODE="revert" ;;
   -h|--help) sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
@@ -159,6 +161,33 @@ ensure_env() {
   grep -q '^TRADEAGENT_OLLAMA_URL=' .env || echo 'TRADEAGENT_OLLAMA_URL=http://127.0.0.1:11434' >> .env
   dim "provider=ollama (روی GPU محلی)"
 }
+
+if [[ "$MODE" == "verify" ]]; then
+  step "یک چرخهٔ واقعی، همین حالا"
+  WAS_ACTIVE=0
+  systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 && WAS_ACTIVE=1
+  if (( WAS_ACTIVE )); then
+    systemctl --user stop tradeagent-gold.service 2>/dev/null || true
+    ok "سرویس موقتاً خوابید (قفل آزاد شود)"
+  fi
+  for _ in $(seq 1 20); do
+    PID="$(awk '{print $1}' var/loop.lock 2>/dev/null || true)"
+    [[ -z "${PID:-}" ]] || ! kill -0 "$PID" 2>/dev/null && break
+    sleep 1
+  done
+  rm -f var/loop.lock
+
+  "$PY" -m tradeagent --config configs/gold.toml loop --once 2>&1 | tail -40
+
+  step "حکم مدل در گزارش"
+  grep -m 4 -E "جهت|فاز|قدرت|افق|اطمینان|استدلال" var/reports/latest.md 2>/dev/null | sed 's/^/  /' \
+    || dim "گزارش تازه‌ای نبود"
+
+  if (( WAS_ACTIVE )); then
+    systemctl --user start tradeagent-gold.service 2>/dev/null && ok "سرویس دوباره روشن شد"
+  fi
+  exit 0
+fi
 
 if [[ "$MODE" == "restart" ]]; then
   step "بارگذاری کد تازه"
