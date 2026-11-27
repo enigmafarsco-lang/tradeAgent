@@ -130,6 +130,19 @@ def journal_notices(limit: int = 3) -> list[str]:
     return []
 
 
+def _attempt_flags(lines: list[str]) -> dict[str, bool]:
+    """فقط آخرین تلاش مهم است، نه هشت خط آخر — وگرنه یک اتصال موفق را «۴۰۱۴» می‌خوانیم."""
+    attempts = [ln for ln in lines if "connect" in ln.lower() and "[trade-mcp]" in ln.lower()]
+    last = attempts[-1].lower() if attempts else ""
+    return {
+
+        "not_allowed": "err=4014" in last,
+        "refused": "err=5272" in last or "err=5273" in last,
+        "connected": "connected" in last and "failed" not in last,
+        "last_attempt": attempts[-1][:160] if attempts else "",
+    }
+
+
 def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
     files = candidate_logs(extra_dirs)
     if not files:
@@ -155,6 +168,7 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
             "refused": False,
             "not_allowed": False,
             "connected": False,
+            "last_attempt": "",
             "no_line": True,
         }
     (_, m), f, ea = best
@@ -163,11 +177,7 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
         "file": str(f),
         "age_s": int(time.time() - m),
         "last": ea[-3:],
-        # 4014 = ERR_FUNCTION_NOT_ALLOWED («Function is not allowed for call»)، نه
-        # «connection refused»: متاتریدر آدرس را در لیست مجازِ سوکت ندارد.
-        "not_allowed": any("err=4014" in ln for ln in ea[-8:]),
-        "refused": any("err=5272" in ln or "err=5273" in ln for ln in ea[-8:]),
-        "connected": any("connected" in ln.lower() for ln in ea[-8:]),
+        **_attempt_flags(ea),
     }
 
 
@@ -203,7 +213,9 @@ def report() -> None:
         print(f"    {line[:150]}")
     if info.get("no_line"):
         print("    (هیچ خط trade-mcp در هیچ فایل لاگی نبود: اکسپرت روی چارت اجرا نشده)")
-    if info.get("not_allowed"):
+    if info.get("connected"):
+        print("  ✓ اکسپرت وصل است (آخرین خط: connected)")
+    elif info.get("not_allowed"):
         print("  ! err=4014 یعنی «Function is not allowed for call» - نه بسته بودن سوکت.")
         print("    متاتریدر آدرس سوکت را در لیست مجاز ندارد. مسیر:")
         print("    Tools -> Options -> Expert Advisors -> تیک «Allow WebRequest for listed URL»")

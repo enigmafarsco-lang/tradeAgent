@@ -206,7 +206,7 @@ def test_ea_log_is_utf16_as_metatrader_writes_it(tmp_path, monkeypatch) -> None:
 
     info = Runner._ea_log()
     assert info["not_allowed"] is True
-    assert "err=4014" in info["last"][-1]
+    assert "err=4014" in info["last_attempt"]
 
 
 def test_diag_finds_logs_deep_inside_the_prefix(tmp_path, monkeypatch) -> None:
@@ -250,3 +250,20 @@ def test_diag_knows_4014_is_a_permission_error(tmp_path, monkeypatch) -> None:
     info = ea_log()
     assert info["not_allowed"] is True
     assert info["refused"] is False
+
+
+def test_last_attempt_decides_not_the_older_errors(tmp_path, monkeypatch) -> None:
+    """بعد از یک اتصال موفق، خط‌های ۴۰۱۴ قدیمی نباید «blocked» گزارش شوند."""
+    from tradeagent.diag import ea_log
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    logs = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "20261127.log").write_text(
+        "NE 0 15:27:52 TradeMCPConnector [trade-mcp] connect to 127.0.0.1:8787 failed, err=4014\n"
+        "GH 0 15:27:58 TradeMCPConnector [trade-mcp] connected to 127.0.0.1:8787\n",
+        encoding="utf-8",
+    )
+    info = ea_log()
+    assert info["connected"] is True
+    assert info["not_allowed"] is False

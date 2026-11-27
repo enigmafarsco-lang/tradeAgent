@@ -79,7 +79,9 @@ try:
 except Exception:
     ea = d.get("ea_log") or {}
 if ea.get("found"):
-    if ea.get("not_allowed"):
+    if ea.get("connected"):
+        tag = "connected"
+    elif ea.get("not_allowed"):
         tag = "blocked(4014)"
     elif ea.get("refused"):
         tag = "refused(5272)"
