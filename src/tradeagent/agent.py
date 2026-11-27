@@ -79,6 +79,8 @@ Rules:
 - Ordering/execution tools are disabled: this system is paper-only.
 - Prefer local_* tools (they read our own tick files) when MT5 tools answer
   'not_connected'. You always have tick data, so you can always judge momentum.
+- Numbers ending in _bp are basis points: 1 bp = 0.01 percent. Say "12 bp", never "12 percent".
+  Quote the tool numbers as they are; do not rescale them.
 - Write "analysis", "reason" and every human text in Persian (فارسی); keep symbol names,
   numbers and field names exactly as the tools returned them.
 - If the data is insufficient (closed market, wide spread), say so in "analysis" and

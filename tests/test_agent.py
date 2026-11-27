@@ -357,3 +357,12 @@ def test_agent_asks_again_when_momentum_is_missing() -> None:
     assert len(seen) >= 2, "باید دوباره از مدل پرسیده شود"
     assert "missing" in seen[1][-1]["content"]
     assert trace.momentum and trace.momentum["direction"] == "up"
+
+
+def test_contract_survives_percent_formatting() -> None:
+    """قرارداد با % فرمت می‌شود؛ هر % اضافی در متن آن را می‌شکند."""
+    from tradeagent.agent import CONTRACT
+
+    text = CONTRACT % {"max_calls": 6}
+    assert "max 6 tools" in text
+    assert "basis points" in text

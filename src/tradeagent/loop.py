@@ -642,7 +642,8 @@ class Runner:
             "agent": result.extra.get("agent"),
             "momentum": result.extra.get("momentum"),
             "agent_action": result.extra.get("agent_action"),
-            "open_positions": len(result.open_positions),
+            # بعد از حکم مدل هم ممکن است پوزیشن باز شده باشد؛ از دیسک بخوان
+            "open_positions": len(self.store.load_positions()),
             "equity": result.equity,
             "trades_closed": len(result.closed_trades),
             "report_md": str(self.reports_dir / "latest.md"),
