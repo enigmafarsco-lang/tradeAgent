@@ -8,6 +8,7 @@
 #   ./scripts/fix_nvidia.sh --deep       # وقتی ماژول "No such device" می‌دهد: دلیل را پیدا کن
 #   ./scripts/fix_nvidia.sh --nouveau-off # اگر nouveau کارت را گرفته باشد
 #   ./scripts/fix_nvidia.sh --pci-reset   # اگر درایور کارت را در سطح PCI نمی‌بیند
+#   ./scripts/fix_nvidia.sh --free-vfio   # اگر vfio-pci کارت را گرفته باشد (پشتیبان می‌گیرد)
 #
 # علت رایج: Secure Boot روشن + ماژول DKMS امضانشده → "Key was rejected by service".
 # راه بدون BIOS: بسته‌های امضاشدهٔ اوبونتو (linux-modules-nvidia-*-generic).
@@ -20,6 +21,7 @@ DO_MOK=0
 DEEP=0
 NOUVEAU_OFF=0
 PCI_RESET=0
+FREE_VFIO=0
 
 for a in "$@"; do
   case "$a" in
@@ -28,6 +30,7 @@ for a in "$@"; do
     --deep) DEEP=1 ;;
     --nouveau-off) NOUVEAU_OFF=1 ;;
     --pci-reset) PCI_RESET=1 ;;
+    --free-vfio) FREE_VFIO=1 ;;
     -h|--help) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$a"; exit 2 ;;
   esac
@@ -98,6 +101,103 @@ pci_reset_gpu() {
     warn "ریست کافی نبود؛ احتمالاً درایور غیر-آزاد لازم است:"
     echo "      sudo apt install nvidia-driver-595 && sudo reboot"
   fi
+  return 0
+}
+
+free_vfio() {
+  local bdf full id md="${MODPROBE_D_DIR:-/etc/modprobe.d}" grub="${GRUB_FILE:-/etc/default/grub}"
+  local touched_grub=0 changed=0
+  bdf="$(lspci -nn 2>/dev/null | awk '/NVIDIA/ && /VGA|3D/{print $1; exit}')"
+  [[ -n "$bdf" ]] || { bad "کارت NVIDIA در lspci نیست"; return 1; }
+  full="$bdf"; [[ "$full" != *:*:* ]] && full="0000:$full"
+  id="$(lspci -nn -s "$bdf" 2>/dev/null | grep -o '[0-9a-f]\{4\}:[0-9a-f]\{4\}' | tail -n1)"
+
+  step "1/4 چه چیزی کارت ($full, id ${id:-?}) را گرفته است"
+  local hits
+  hits="$(grep -RIn --include='*.conf' -e 'vfio' -e "${id:-@@none@@}" "$md" 2>/dev/null || true)"
+  if [[ -n "$hits" ]]; then printf '%s\n' "$hits" | sed 's/^/    /'; else dim "modprobe.d: چیزی پیدا نشد"; fi
+  if grep -q 'vfio' "$grub" 2>/dev/null; then
+    grep -n 'vfio' "$grub" | sed 's/^/    /'
+    touched_grub=1
+  else
+    dim "grub: چیزی پیدا نشد"
+  fi
+
+  sudo -v 2>/dev/null || { bad "sudo لازم است"; return 1; }
+
+  step "2/4 آزادکردن فوری کارت (بدون ریبوت)"
+  if [[ -d /sys/bus/pci/drivers/vfio-pci ]]; then
+    sudo sh -c "echo '$full' > /sys/bus/pci/drivers/vfio-pci/unbind" 2>/dev/null \
+      && ok "از vfio-pci جدا شد" || warn "جداکردن از vfio-pci انجام نشد"
+    sudo sh -c "echo '$full' > /sys/bus/pci/drivers_probe" 2>/dev/null || true
+    sleep 1
+  else
+    dim "vfio-pci در حال حاضر روی سیستم نیست"
+  fi
+  sudo modprobe nvidia 2>&1 | tail -2
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    ok "ماژول nvidia بار شد: $(head -n1 /proc/driver/nvidia/version)"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/    /'
+  else
+    warn "هنوز بار نشد؛ پاک‌سازی ماندگار لازم است (ادامه می‌دهم)"
+  fi
+
+  if [[ -z "$hits" && $touched_grub -eq 0 ]]; then
+    dim "هیچ تنظیم ماندگاری نبود؛ پس از ریبوت دوباره بررسی کن"
+    return 0
+  fi
+
+  step "3/4 پاک‌سازی ماندگار (با نسخهٔ پشتیبان)"
+  local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+  local f
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    sudo cp "$f" "$f.tradeagent-backup-$stamp" || { warn "پشتیبان‌گیری از $f نشد"; continue; }
+    sudo python3 - "$f" "$full" "$id" <<'PY' || { warn "ویرایش $f نشد"; continue; }
+import re, sys, pathlib
+path, full, dev = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(path)
+lines = p.read_text().splitlines()
+out, changed = [], False
+for ln in lines:
+    keep = ln
+    if "vfio" in ln and (dev in ln or "vfio-pci" in ln):
+        keep = "# " + ln + "   # disabled by tradeAgent (GPU needed for LLM)"
+        changed = True
+    out.append(keep)
+if changed:
+    p.write_text("\n".join(out) + "\n")
+PY
+    ok "ویرایش شد: $f (پشتیبان: $f.tradeagent-backup-$stamp)"
+    changed=1
+  done < <(grep -RIl --include='*.conf' -e 'vfio' "$md" 2>/dev/null || true)
+
+  if (( touched_grub )); then
+    sudo cp "$grub" "$grub.tradeagent-backup-$stamp" || warn "پشتیبان‌گیری از grub نشد"
+    sudo python3 - "$grub" <<'PY' || warn "ویرایش grub نشد"
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+new = re.sub(r'\s*vfio-pci\.ids=[^\s"]*', '', text)
+if new != text:
+    p.write_text(new)
+PY
+    ok "vfio-pci.ids از $grub برداشته شد (پشتیبان: $grub.tradeagent-backup-$stamp)"
+    changed=1
+  fi
+
+  step "4/4 بازسازی initramfs و grub"
+  sudo update-initramfs -u >/dev/null 2>&1 && ok "initramfs بازسازی شد" || warn "update-initramfs خطا داد"
+  if (( touched_grub )); then
+    sudo update-grub >/dev/null 2>&1 && ok "grub به‌روز شد" || warn "update-grub خطا داد"
+  fi
+  echo
+  if [[ -r /proc/driver/nvidia/version ]]; then
+    ok "همین حالا کار می‌کند: ./scripts/setup_llm.sh --hardware"
+  else
+    ok "حالا ریبوت کن: sudo reboot  (بعدش ./scripts/fix_nvidia.sh --check)"
+  fi
+  dim "برای برگشت: فایل‌های .tradeagent-backup-$stamp را بازگردان و initramfs/grub را دوباره بساز"
   return 0
 }
 
@@ -220,6 +320,7 @@ echo "  drivers     : ${PKGS:-none}"
 DKMS_N="$(dkms status 2>/dev/null | grep -c nvidia || true)"
 echo "  dkms entries: ${DKMS_N}"
 
+if (( FREE_VFIO )); then free_vfio; exit $?; fi
 if (( NOUVEAU_OFF )); then free_nouveau; exit $?; fi
 if (( PCI_RESET )); then pci_reset_gpu; exit $?; fi
 

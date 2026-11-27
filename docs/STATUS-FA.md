@@ -85,9 +85,10 @@
 
 بعد از ریبوت روی کرنل `7.0.0-44` ماژول امضاشده بارگذاری مجاز شد، ولی
 `modprobe nvidia` می‌گوید **`No such device`** و `dmesg` هم `NVRM: No NVIDIA GPU found`
-دارد. یعنی امضا حل شد و مسئله «چه کسی کارت را در اختیار دارد» است. حکم قطعی با
-`./scripts/fix_nvidia.sh --deep` (خروجی در `var/logs/nvidia-diag.txt`)، بعد
-`--nouveau-off` یا `--pci-reset` یا درایور غیر-آزاد.
+دارد. یعنی امضا حل شد و مسئله «چه کسی کارت را در اختیار دارد» است. حکم قطعی با `./scripts/fix_nvidia.sh --deep` آمد: **`vfio-pci` کارت را گرفته است**
+(تنظیم پاس‌دادن GPU به ماشین مجازی). رفع: `./scripts/fix_nvidia.sh --free-vfio`
+(جداکردن فوری + کامنت‌کردن `vfio` در `modprobe.d` + حذف `vfio-pci.ids` از grub،
+با نسخهٔ پشتیبان) و سپس ریبوت.
 
 ## نگهبان ضبط (watchdog)
 
