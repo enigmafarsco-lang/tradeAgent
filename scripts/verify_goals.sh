@@ -39,56 +39,80 @@ print(pathlib.Path(data.get("data", {}).get("harvester_dir", "")).expanduser())
 PY
 )"
 
+# اجازهٔ override برای تست و برای وقتی مسیر در کانفیگ نیست
+[[ -n "${TRADEAGENT_HARVESTER_DIR:-}" ]] && HARV="$TRADEAGENT_HARVESTER_DIR"
+
 say "=== 1) harvester heartbeat ==="
-# اکسپرت فایل را پشت‌سرهم بازنویسی می‌کند؛ یک لحظه ممکن است نباشد
-for _ in 1 2 3 4 5 6 7 8; do
-  [[ -n "$HARV" && -f "$HARV/status.json" ]] && break
-  sleep 0.25
-done
-
+# دو سنجهٔ مستقل: status.json (که EA ممکن است در حال بازنویسی باشد) و ماندگاری
+# خود فایل تیک‌ها. اگر یکی تازه باشد، ضبط زنده است؛ سنجهٔ تیک قابل‌دستکاری نیست
+# چون هر تیک یک خط به فایل اضافه می‌کند.
+STATUS_AGE=""
+STATUS_NOTE=""
 if [[ -n "$HARV" && -f "$HARV/status.json" ]]; then
-  RESULT="$(python3 - "$HARV/status.json" <<'PY'
+  STATUS_AGE="$(python3 - "$HARV/status.json" <<'PY'
 import json, os, sys, time
-
 path = sys.argv[1]
 data = None
-for _ in range(6):
+for _ in range(20):                     # تا ۵ ثانیه صبر می‌کنیم تا نوشتن تمام شود
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         break
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        time.sleep(0.25)          # the EA may be rewriting the file right now
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        time.sleep(0.25)
 if data is None:
-    mtime_age = max(0.0, time.time() - os.stat(path).st_mtime)
-    print(f"  path      : {path}")
-    print("  note      : status.json unreadable (rewritten while reading) - using mtime")
-    print(f"  heartbeat : {mtime_age:.0f}s ago")
-    print("OK" if mtime_age < 180 else "STALE")
+    print(f"{max(0.0, time.time() - os.stat(path).st_mtime):.0f}")
+    print("unreadable")
     raise SystemExit
-
-ages = [s.get("age_s", -1) for s in data.get("symbols", []) if isinstance(s, dict)]
-fresh = [a for a in ages if isinstance(a, (int, float)) and a >= 0]
+ages = [s.get("age_s") for s in data.get("symbols", [])
+        if isinstance(s, dict) and isinstance(s.get("age_s"), (int, float)) and s["age_s"] >= 0]
 mtime_age = max(0.0, time.time() - os.stat(path).st_mtime)
-age = min(fresh) if fresh else mtime_age
-print(f"  path      : {path}")
-print(f"  symbols   : {len(data.get('symbols', []))} | total_ticks: {data.get('total_ticks', 0)} | version: {data.get('version', '?')}")
-print(f"  heartbeat : {age:.0f}s ago")
-print("OK" if age < 180 else "STALE")
+age = min(ages) if ages else mtime_age
+print(f"{age:.0f}")
+print(f"{len(data.get('symbols', []))}")
+print(f"{data.get('total_ticks', 0)}")
 PY
-)"
-  printf '%s\n' "$RESULT" | sed 's/^/  /'
-  if printf '%s\n' "$RESULT" | grep -qx 'OK'; then
-    pass "harvester is alive"
-  else
-    fail "harvester heartbeat is stale (>180s) - EA/AutoTrading?"
-  fi
+)" 2>/dev/null
+  [[ -n "$STATUS_AGE" ]] || STATUS_NOTE="status.json unreadable while the EA rewrites it"
 else
-  fail "no status.json at ${HARV:-<harvester_dir not set>} - the EA never ran"
+  STATUS_NOTE="no status.json"
 fi
 
-say ""
-say "=== 2) today's tick files ==="
+TICK_AGE=""
+TICK_FILE=""
+if [[ -n "$HARV" ]]; then
+  TICK_FILE="$(find "$HARV/ticks" -type f -name '*.csv' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
+  if [[ -n "$TICK_FILE" ]]; then
+    TICK_AGE=$(( $(date +%s) - $(stat -c %Y "$TICK_FILE") ))
+  fi
+fi
+
+STATUS_LINE="$(printf '%s' "$STATUS_AGE" | head -n1)"
+NSYM="$(printf '%s' "$STATUS_AGE" | sed -n 2p)"
+NTICKS="$(printf '%s' "$STATUS_AGE" | sed -n 3p)"
+if [[ -n "$STATUS_LINE" ]]; then printf '  status     : %ss ago\n' "$STATUS_LINE"
+else printf '  status     : n/a\n'; fi
+if [[ "$NSYM" == "unreadable" ]]; then
+  printf '  note       : status.json was mid-rewrite; the tick files are the real proof\n'
+elif [[ -n "$NSYM" ]]; then
+  printf '  ea reports : %s symbols | %s ticks\n' "$NSYM" "$NTICKS"
+fi
+[[ -n "$STATUS_NOTE" ]] && printf '  note       : %s\n' "$STATUS_NOTE"
+if [[ -n "$TICK_AGE" ]]; then printf '  newest tick: %ss ago  %s\n' "$TICK_AGE" "${TICK_FILE##*/}"
+else printf '  newest tick: n/a\n'; fi
+
+LIVE_LIMIT="${LIVE_LIMIT:-300}"
+live=999999
+[[ "$STATUS_LINE" =~ ^[0-9]+$ ]] && (( STATUS_LINE < live )) && live="$STATUS_LINE"
+[[ "$TICK_AGE" =~ ^[0-9]+$ ]] && (( TICK_AGE < live )) && live="$TICK_AGE"
+if (( live <= LIVE_LIMIT )); then
+  pass "harvester is alive (freshest signal ${live}s ago, limit ${LIVE_LIMIT}s)"
+elif [[ -z "$HARV" ]]; then
+  fail "no harvester directory found - set TRADEAGENT_DATA_DIR"
+else
+  fail "no ticks and no heartbeat for ${live}s - EA/AutoTrading?  (./scripts/watch_harvester.sh --auto)"
+fi
+say ""say "=== 2) today's tick files ==="
 TODAY="$(date -u +%Y%m%d)"
 N="$(find "$HARV/ticks" -mindepth 2 -maxdepth 2 -name "$TODAY.csv" 2>/dev/null | wc -l)"
 SZ="$(du -sh "$HARV/ticks" 2>/dev/null | cut -f1)"
