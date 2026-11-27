@@ -14,7 +14,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 PREFIX="${MT5_WINEPREFIX:-$HOME/Wine}"
-MAX_SILENCE="${MAX_SILENCE:-900}"
+MAX_SILENCE="${MAX_SILENCE:-300}"
 AUTO=0
 DRY=0
 INSTALL_TIMER=0
@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY=1 ;;
     --install-timer) INSTALL_TIMER=1 ;;
     --install-boot) INSTALL_BOOT=1 ;;
-    --max-silence) MAX_SILENCE="${2:-900}"; shift ;;
+    --max-silence) MAX_SILENCE="${2:-300}"; shift ;;
     -h|--help) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1"; exit 2 ;;
   esac
@@ -50,7 +50,7 @@ RemainAfterExit=yes
 ExecStart=$ROOT/scripts/setup_once.sh
 UNIT
   systemctl --user daemon-reload 2>/dev/null || true
-  if systemctl --user enable tradeagent-mt5.service 2>/dev/null; then
+  if systemctl --user enable --now tradeagent-mt5.service 2>/dev/null; then
     ok "MT5 will start at every login: tradeagent-mt5.service"
     dim "now: systemctl --user start tradeagent-mt5.service   |   off: systemctl --user disable --now tradeagent-mt5.service"
   else
@@ -125,14 +125,18 @@ HB_AGE="$(age_of "$HB_FILE")"
 TICK_NEWEST="$(find "$HARV/ticks" -type f -name '*.csv' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
 TICK_AGE="$(age_of "${TICK_NEWEST:-/nonexistent}")"
 
-dim "dir      : $HARV"
-dim "heartbeat: ${HB_AGE}s ago"
+# اگر status.json در حال بازنویسی باشد سنش بی‌معنی است؛ فایل تیک سنجهٔ واقعی است
+LIVE_AGE="$HB_AGE"
+(( TICK_AGE < LIVE_AGE )) && LIVE_AGE="$TICK_AGE"
+dim "dir        : $HARV"
+dim "status.json: ${HB_AGE}s ago"
 dim "newest tick: ${TICK_AGE}s ago (${TICK_NEWEST:-none})"
+dim "liveness   : ${LIVE_AGE}s ago (limit ${MAX_SILENCE}s)"
 
 terminal_running() { pgrep -f 'terminal64\.exe' >/dev/null 2>&1; }
 
-if (( HB_AGE <= MAX_SILENCE )); then
-  ok "recording is alive (heartbeat ${HB_AGE}s < ${MAX_SILENCE}s)"
+if (( LIVE_AGE <= MAX_SILENCE )); then
+  ok "recording is alive (freshest signal ${LIVE_AGE}s < ${MAX_SILENCE}s)"
   exit 0
 fi
 
@@ -178,8 +182,11 @@ fi
 # انتظار تا ضربان تازه (راه‌اندازی MT5 زیر Wine چند دقیقه طول می‌کشد)
 waited=0
 while (( waited < WATCH_WAIT )); do
-  if (( $(age_of "$HB_FILE") <= 180 )); then
-    ok "heartbeat is fresh again ($(age_of "$HB_FILE")s)"
+  hb_now="$(age_of "$HB_FILE")"
+  tk_now="$(age_of "${TICK_NEWEST:-/nonexistent}")"
+  now_age="$hb_now"; (( tk_now < now_age )) && now_age="$tk_now"
+  if (( now_age <= 180 )); then
+    ok "heartbeat is fresh again (freshest signal ${now_age}s)"
     say "recovered"
     exit 0
   fi
