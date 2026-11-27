@@ -21,25 +21,25 @@
     "risk_scale": 1.0
   },
   "next": {
-    "variant": "meanrev",
+    "variant": "momentum",
     "params": {
       "lookback_s": 300,
-      "breakout_k": 1.0,
-      "sl_atr": 1.2,
-      "rr": 1.2,
-      "hold_s": 600,
-      "min_edge_bps": 1.5,
-      "max_spread_bps": 5.0,
-      "cooldown_s": 240,
+      "breakout_k": 1.25,
+      "sl_atr": 1.495,
+      "rr": 1.44,
+      "hold_s": 810,
+      "min_edge_bps": 3.0,
+      "max_spread_bps": 4.5,
+      "cooldown_s": 450,
       "z_entry": 1.8,
-      "max_vol_bps": 35.0
+      "max_vol_bps": 90.0
     },
-    "level": 4,
-    "generation": 9,
-    "version": 10,
+    "level": 3,
+    "generation": 10,
+    "version": 11,
     "source": "adaptive",
-    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑) • فیلتر هزینه سخت‌تر (سقف اسپرد ↓، فاصله بین ورودها ↑) • فاصله‌ی استاپ ↑ و هدف نزدیک‌تر (کاهش نویز-استاپ) • تغییر خانواده‌ی استراتژی",
+    "reason": "سخت‌ترکردن شرط ورود (breakout_k ↑، حداقل لبه ↑) • فیلتر هزینه سخت‌تر (سقف اسپرد ↓، فاصله بین ورودها ↑) • فاصله‌ی استاپ ↑ و هدف نزدیک‌تر (کاهش نویز-استاپ)",
     "risk_scale": 1.0
   },
-  "ts": "2026-11-27T14:56:09Z"
+  "ts": "2026-11-27T14:59:04Z"
 }
