@@ -19,6 +19,7 @@ from typing import Any, Sequence
 
 from . import features as feat
 from .config import Config
+from . import strategy as strat
 from .strategy import Intent, evaluate
 from .ticks import Bar
 from .util import LOG, ensure_dir, utc_day, utc_iso
@@ -528,6 +529,73 @@ class PaperEngine:
             intent.sl_bps, intent.tp_bps, intent.variant,
         )
         return pos
+
+    # -- حکم مدل → پوزیشن ----------------------------------------------
+    def open_from_momentum(
+        self,
+        symbol: str,
+        bars: Sequence[Bar],
+        momentum: dict[str, Any],
+        policy: dict[str, Any],
+        cycle: int,
+        now_ts: int | None = None,
+        min_confidence: float = 0.5,
+        min_strength: float = 0.0,
+    ) -> dict[str, Any]:
+        """حکم تکانهٔ مدل را اجرا می‌کند؛ هیچ داوری‌ای این‌جا نیست.
+
+        جهت/فاز/قدرت/افق را مدل داده است. این‌جا فقط:
+        * عددها به SL/TP/حجم تبدیل می‌شوند (ATR و سیاست، مثل بقیهٔ استراتژی‌ها)،
+        * اگر عکسِ پوزیشن باز باشد، همان لحظه بسته می‌شود،
+        * اگر مدل «flat» یا بی‌اطمینان گفت، هیچ کاری نمی‌شود.
+        """
+        out: dict[str, Any] = {"symbol": symbol, "action": "none"}
+        direction_txt = str(momentum.get("direction") or "flat").strip().lower()
+        if direction_txt not in ("up", "down"):
+            out["reason"] = "مدل جهت نداد (flat)"
+            return out
+        try:
+            confidence = float(momentum.get("confidence") or 0.0)
+            strength = float(momentum.get("strength") or 0.0)
+            horizon = int(float(momentum.get("horizon_s") or 60))
+        except (TypeError, ValueError):
+            out["reason"] = "اعداد حکم مدل خوانده نشد"
+            return out
+        if confidence < min_confidence or strength < min_strength:
+            out["reason"] = f"اطمینان/قدرت کم ({confidence:.2f}/{strength:.2f})"
+            return out
+        if not bars:
+            out["reason"] = "کندلی نیست"
+            return out
+        side = 1 if direction_txt == "up" else -1
+        bar = bars[-1]
+        pos = self.store.load_positions().get(symbol)
+        if pos is not None:
+            if pos.side == side:
+                out.update(action="hold", reason="پوزیشن هم‌جهت باز است")
+                return out
+            flip_price = bar.close * (1 - pos.side * (bar.spread_bps / 2.0 + self.slip_bps) / 1e4)
+            trade = self._finalize(pos, flip_price, bar.t, "model_flip", cycle)
+            out["closed"] = trade.as_dict() if hasattr(trade, "as_dict") else str(trade)
+        f = feat.compute_features(bars, len(bars) - 1)
+        sl, tp = strat._size_from_atr(f, dict(policy.get("params") or {}))
+        intent = Intent(
+            direction=side,
+            sl_bps=sl,
+            tp_bps=tp,
+            hold_s=max(5, min(900, horizon)),
+            edge_bps=float(f.atr_bps),
+            variant="agent_momentum",
+            reason=str(momentum.get("reason") or "")[:200],
+        )
+        balance = float(self.store.get_meta("balance", self.starting_balance))
+        opened = self._open_position(symbol, bar, intent, policy, cycle, balance)
+        if opened is None:
+            out["reason"] = "حجم/قیمت اجازه نداد"
+            return out
+        out.update(action="open", side=side, entry=opened.entry_price, notional=opened.notional,
+                   sl_bps=sl, tp_bps=tp, hold_s=intent.hold_s, confidence=confidence)
+        return out
 
     def _set_balance(self, value: float) -> None:
         self.store.set_meta("balance", round(value, 6))

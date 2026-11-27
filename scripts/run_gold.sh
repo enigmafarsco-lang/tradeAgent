@@ -209,6 +209,12 @@ if agent:
         print(f"  تحلیل: {str(agent.get('analysis'))[:220]}")
 else:
     print("  ایجنت اجرا نشد (agent خالی)" + (f" · خطا: {data.get('publish')}" if not data else ""))
+act = data.get("agent_action") or {}
+if act:
+    print(f"  اقدام: {act.get('action')} " + (f"| side={act.get('side')} entry={act.get('entry')} "
+          f"notional={act.get('notional')} نگهداری={act.get('hold_s')}s" if act.get('action') == 'open'
+          else f"| {act.get('reason') or ''}"))
+print(f"  پوزیشن باز: {data.get('open_positions')}")
 mom = data.get("momentum") or {}
 if mom:
     print(f"  حکم تکانه: {mom.get('direction')}/{mom.get('phase')} "

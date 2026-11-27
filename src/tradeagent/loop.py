@@ -489,6 +489,29 @@ class Runner:
                             "پیش‌بینی ایجنت: %s %s (اطمینان %.2f، افق %ss)",
                             symbol, rec.direction, rec.confidence, rec.horizon_s,
                         )
+                    # حکم مدل مستقیماً پوزیشن کاغذی می‌شود؛ پایتون فقط عدد را اجرا می‌کند
+                    try:
+                        act = self.engine.open_from_momentum(
+                            symbol,
+                            bars,
+                            trace.momentum,
+                            base,
+                            cycle,
+                            now_ts,
+                            min_confidence=float(self.cfg.get("nowcast.min_confidence", 0.5)),
+                            min_strength=float(self.cfg.get("nowcast.min_strength", 0.0)),
+                        )
+                        result.extra["agent_action"] = act
+                        if act.get("action") == "open":
+                            result.warnings.append(
+                                f"مدل گفت {act.get('side')} → پوزیشن کاغذی باز شد "
+                                f"@ {act.get('entry')} (SL {act.get('sl_bps'):.1f}bp، "
+                                f"نگهداری {act.get('hold_s')}s)"
+                            )
+                        elif act.get("closed"):
+                            result.warnings.append("حکم برعکس: پوزیشن قبلی بسته شد")
+                    except Exception as exc:  # noqa: BLE001
+                        result.warnings.append(f"اجرای حکم مدل: {type(exc).__name__}: {exc}")
                 if trace.error:
                     result.warnings.append(f"ایجنت: {trace.error}")
                 # بدون ok صریح، گزارش همیشه llm=false می‌نوشت حتی وقتی ایجنت موفق بود
@@ -618,6 +641,8 @@ class Runner:
             "cycle": cycle,
             "agent": result.extra.get("agent"),
             "momentum": result.extra.get("momentum"),
+            "agent_action": result.extra.get("agent_action"),
+            "open_positions": len(result.open_positions),
             "equity": result.equity,
             "trades_closed": len(result.closed_trades),
             "report_md": str(self.reports_dir / "latest.md"),

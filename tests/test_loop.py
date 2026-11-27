@@ -371,3 +371,71 @@ def test_local_tools_resolve_the_symbol_name_the_model_uses(cfg: Config) -> None
     assert dig["symbol"] == "XAUUSD_i" and dig["bars"] == 6
     cand = tools["local_candles"](symbol="xauusd", seconds=1, count=3)
     assert cand["symbol"] == "XAUUSD_i" and cand["candles"]
+
+
+def _bars(symbol: str, n: int = 400, start: float = 4000.0, drift: float = 0.02):
+    from tradeagent.ticks import Bar
+
+    return [
+        Bar(t=1_700_000_000 + i, open=start + i * drift, high=start + i * drift + 0.5,
+            low=start + i * drift - 0.5, close=start + (i + 1) * drift,
+            bid_close=start + (i + 1) * drift - 0.1, ask_close=start + (i + 1) * drift + 0.1,
+            spread_bps_max=1.0, ticks=20, volume=1.0)
+        for i in range(n)
+    ]
+
+
+def test_agent_verdict_opens_a_paper_position(cfg: Config) -> None:
+    """حکم مدل باید پوزیشن شود؛ نه اینکه فقط در گزارش بیاید."""
+    runner = Runner(cfg)
+    bars = _bars("XAUUSD_i")
+    runner.store.add_bars("XAUUSD_i", bars)
+    act = runner.engine.open_from_momentum(
+        "XAUUSD_i",
+        bars,
+        {"direction": "up", "phase": "accelerating", "strength": 0.7, "confidence": 0.8,
+         "horizon_s": 120, "reason": "شتاب مثبت"},
+        runner.current_policy(),
+        1,
+        now_ts=bars[-1].t,
+    )
+    assert act["action"] == "open" and act["side"] == 1
+    pos = runner.store.load_positions()["XAUUSD_i"]
+    assert pos.side == 1 and pos.variant == "agent_momentum"
+    assert 5 <= pos.hold_s <= 900
+
+
+def test_low_confidence_verdict_does_not_trade(cfg: Config) -> None:
+    runner = Runner(cfg)
+    bars = _bars("XAUUSD_i")
+    runner.store.add_bars("XAUUSD_i", bars)
+    act = runner.engine.open_from_momentum(
+        "XAUUSD_i", bars,
+        {"direction": "down", "strength": 0.2, "confidence": 0.1, "horizon_s": 60},
+        runner.current_policy(), 1, now_ts=bars[-1].t,
+    )
+    assert act["action"] == "none"
+    assert not runner.store.load_positions()
+
+
+def test_opposite_verdict_flips_the_position(cfg: Config) -> None:
+    runner = Runner(cfg)
+    bars = _bars("XAUUSD_i")
+    runner.store.add_bars("XAUUSD_i", bars)
+    policy = runner.current_policy()
+    runner.engine.open_from_momentum(
+        "XAUUSD_i", bars,
+        {"direction": "up", "strength": 0.8, "confidence": 0.9, "horizon_s": 60},
+        policy, 1, now_ts=bars[-1].t,
+    )
+    later = _bars("XAUUSD_i", start=4001.0, drift=-0.02)
+    for b in later:
+        b.t += 1000
+    runner.store.add_bars("XAUUSD_i", later)
+    act = runner.engine.open_from_momentum(
+        "XAUUSD_i", later,
+        {"direction": "down", "strength": 0.8, "confidence": 0.9, "horizon_s": 60},
+        policy, 2, now_ts=later[-1].t,
+    )
+    assert act.get("closed"), "پوزیشن قبلی باید بسته شود"
+    assert act["action"] == "open" and act["side"] == -1
