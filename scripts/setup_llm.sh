@@ -10,6 +10,7 @@
 #   ./scripts/setup_llm.sh --repair-ollama       fix a half-finished install (llama-server missing)
 #   ./scripts/setup_llm.sh --hardware            CPU/RAM/GPU and what ollama really uses
 #   ./scripts/setup_llm.sh --gpu                 why the GPU is (not) being used
+#   ./scripts/setup_llm.sh --service             how ollama runs, with which variables
 #   ./scripts/setup_llm.sh --gpu-vulkan          use the Intel/AMD GPU through Vulkan
 #   ./scripts/setup_llm.sh --ollama [model]      use an ollama that is already installed
 #   ./scripts/setup_llm.sh --off                 deterministic decisions only
@@ -429,6 +430,12 @@ ensure_ollama_unit() {
   bin="$(command -v ollama 2>/dev/null)"
   [[ -n "$bin" ]] || return 3
   mkdir -p "$dir"
+  if [[ -f "$dir/ollama.service" ]]; then
+    # واحد موجود است؛ بازنویسی نکن تا Environment=‌ها (Vulkan/context) از دست نروند
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable --now ollama.service 2>/dev/null && { ok "existing ollama.service started (kept its settings)"; return 0; }
+    return 2
+  fi
   cat > "$dir/ollama.service" <<UNIT
 [Unit]
 Description=Ollama local model server (tradeAgent)
@@ -519,6 +526,57 @@ ollama_restart_and_verify() {
   ok "verified: $model -> $OLLAMA_ANS"
   ok "now: systemctl --user restart tradeagent-loop.service"
   return 0
+}
+
+service_diag() {
+  local pid unit="$HOME/.config/systemd/user/ollama.service"
+  echo "--- how ollama is running ---"
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+      echo "  user unit : present ($unit)"
+      local state; state="$(systemctl --user is-active ollama.service 2>/dev/null)"
+      echo "  state     : ${state:-unknown}"
+      echo "  enabled   : $(systemctl --user is-enabled ollama.service 2>/dev/null)"
+      echo "  environment lines in the unit:"
+      grep -n '^Environment=' "$unit" 2>/dev/null | sed 's/^/    /' || echo "    (none!)"
+    else
+      echo "  user unit : NOT installed"
+    fi
+    if systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+      echo "  system unit: present (state: $(systemctl is-active ollama.service 2>/dev/null))"
+    fi
+    if command -v loginctl >/dev/null 2>&1; then
+      echo "  linger    : $(loginctl show-user "$USER" -p Linger 2>/dev/null || echo unknown)"
+    fi
+  fi
+  pid=""
+  for cand in $(pgrep -f 'ollama serve' 2>/dev/null || true); do
+    if [[ "$(ps -o comm= -p "$cand" 2>/dev/null)" == "ollama" ]]; then pid="$cand"; break; fi
+  done
+  if [[ -z "$pid" ]]; then
+    echo "  process   : no 'ollama serve' process found"
+  else
+    echo "  process   : pid $pid ($(ps -o args= -p "$pid" 2>/dev/null | cut -c1-80))"
+    local envs
+    envs="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -E '^OLLAMA_' || true)"
+    if [[ -n "$envs" ]]; then
+      printf '%s\n' "$envs" | sed 's/^/    /'
+    else
+      echo "    no OLLAMA_* variables in this process (Vulkan is off)"
+    fi
+  fi
+  echo "--- gpu state ---"
+  local vram
+  vram="$(curl -s --max-time 5 "$OLLAMA_URL/api/ps" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for m in d.get("models",[]): print(int(m.get("size_vram") or 0))
+' 2>/dev/null | head -n1)"
+  if [[ "${vram:-0}" -gt 0 ]]; then ok "loaded on a GPU ($(awk -v v="$vram" 'BEGIN{printf "%.1f", v/1e9}') GB VRAM)"
+  else warn "no VRAM in use - inference is on the CPU"; fi
+  echo "--- fix ---"
+  echo "  ./scripts/setup_llm.sh --gpu-vulkan     # (re)adds the variables, restarts, proves it"
 }
 
 hardware() {
@@ -702,6 +760,10 @@ enable_vulkan() {
   if [[ ! -f "$unit" ]]; then
     warn "no user unit yet - creating one first"
     ensure_ollama_unit >/dev/null
+  fi
+  if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+    loginctl enable-linger "$USER" 2>/dev/null && ok "linger enabled (starts at boot)" \
+      || warn "linger off: after a reboot nothing starts ollama - sudo loginctl enable-linger $USER"
   fi
   [[ -f "$unit" ]] || { bad "could not create $unit"; return 1; }
 
@@ -914,6 +976,7 @@ case "${1:-}" in
   --status) status ;;
   --hardware|--hw) hardware; exit $? ;;
   --gpu) gpu_diag; exit 0 ;;
+  --service) service_diag; exit 0 ;;
   --gpu-vulkan) shift; enable_vulkan "${1:-}"; exit $? ;;
   "") interactive ;;
 
