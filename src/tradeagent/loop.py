@@ -211,6 +211,21 @@ class Runner:
         return {"pids": pids[:3], "same_netns": verdict}
 
     @staticmethod
+    def _read_log(path: Path) -> list[str]:
+        """متاتریدر لاگش را UTF-16LE می‌نویسد؛ utf-8 خواندنش خطوط را نامرئی می‌کند."""
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return []
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = raw.decode("utf-16", errors="replace")
+        elif b"\x00" in raw[:400]:
+            text = raw.decode("utf-16-le", errors="replace")
+        else:
+            text = raw.decode("utf-8", errors="replace")
+        return text.splitlines()
+
+    @staticmethod
     def _ea_log() -> dict[str, Any]:
         """متاتریدر خود می‌گوید چه خبر است؛ لاگش را بخوان تا کاربر کپی نکند.
 
@@ -233,10 +248,7 @@ class Runner:
         newest = max(files, key=lambda f: f.stat().st_mtime)
         best: tuple[float, Path, list[str]] | None = None
         for f in files:
-            try:
-                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
+            lines = Runner._read_log(f)
             ea = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
             if not ea:
                 continue

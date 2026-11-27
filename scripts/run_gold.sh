@@ -64,13 +64,25 @@ except (OSError, subprocess.SubprocessError):
 print(f"  terminal64.exe: {('running (' + procs[0][:70] + ')') if procs else 'NOT running - متاتریدر باز نیست'}")
 
 # فایل Journal هم هست؛ اول آن را که واقعاً خط trade-mcp دارد بردار
+# متاتریدر لاگ را UTF-16LE می‌نویسد؛ utf-8 خواندن، خطوط را نامرئی می‌کند
+def read_log(path):
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="replace")
+    elif b"\x00" in raw[:400]:
+        text = raw.decode("utf-16-le", errors="replace")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    return text.splitlines()
+
+
 with_ea = []
 for f in found:
-    try:
-        txt = f.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        continue
-    if "trade-mcp" in txt.lower() or "TradeMCPConnector" in txt:
+    lines = read_log(f)
+    if any("trade-mcp" in l.lower() or "TradeMCPConnector" in l for l in lines):
         with_ea.append(f)
 
 if not found:
@@ -79,7 +91,7 @@ else:
     f = (max(with_ea, key=lambda x: x.stat().st_mtime) if with_ea else found[-1])
     age = int(time.time() - f.stat().st_mtime)
     print(f"  Experts log: {f.relative_to(c)} (آخرین نوشتن {age}s پیش)")
-    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = read_log(f)
     keep = [l for l in lines if "trade-mcp" in l.lower() or "TradeMCPConnector" in l]
     for l in (keep[-3:] if keep else lines[-2:]):
         print(f"    {l[:150]}")

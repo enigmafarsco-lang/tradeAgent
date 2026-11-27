@@ -74,6 +74,15 @@ def port_open(host="127.0.0.1", port=8787) -> bool:
         s.close()
 
 
+def read_log(path):
+    raw = path.read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace").splitlines()
+    if b"\x00" in raw[:400]:
+        return raw.decode("utf-16-le", errors="replace").splitlines()
+    return raw.decode("utf-8", errors="replace").splitlines()
+
+
 def ea_log_tail(n=2):
     """آخرین خطوط سمت متاتریدر؛ اول فایلی که واقعاً خط trade-mcp دارد (نه Journal)."""
     if not EXPERT_LOGS:
@@ -81,7 +90,7 @@ def ea_log_tail(n=2):
     best = None
     for f in EXPERT_LOGS:
         try:
-            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = read_log(f)
         except OSError:
             continue
         keep = [ln for ln in lines if "trade-mcp" in ln.lower() or "TradeMCPConnector" in ln]
@@ -90,7 +99,7 @@ def ea_log_tail(n=2):
     if best:
         return best[1][-n:]
     try:
-        lines = EXPERT_LOGS[-1].read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = read_log(EXPERT_LOGS[-1])
     except OSError:
         return []
     return [f"(no trade-mcp line) {ln}" for ln in lines[-1:]]

@@ -192,3 +192,18 @@ def test_ea_log_prefers_the_file_that_has_expert_lines(tmp_path, monkeypatch) ->
     info = Runner._ea_log()
     assert "MQL5" in info["file"]
     assert info["refused"] is True
+
+
+def test_ea_log_is_utf16_as_metatrader_writes_it(tmp_path, monkeypatch) -> None:
+    """متاتریدر لاگ را UTF-16LE می‌نویسد؛ utf-8 خواندن یعنی دیدن هیچ خطی."""
+    from tradeagent.loop import Runner
+
+    logs = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs"
+    logs.mkdir(parents=True)
+    line = "2026.11.27 14:52:32\tTradeMCPConnector (XAUUSD_i,H1)\t[trade-mcp] connect failed, err=4014\r\n"
+    (logs / "20261127.log").write_bytes(line.encode("utf-16-le"))
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+
+    info = Runner._ea_log()
+    assert info["refused"] is True
+    assert "err=4014" in info["last"][-1]
