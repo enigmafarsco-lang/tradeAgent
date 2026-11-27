@@ -202,6 +202,30 @@ def _dig_price_local(node: Any, depth: int = 0) -> float:
     return 0.0
 
 
+DIRECTIONS = {"up", "down", "flat"}
+PHASES = {"accelerating", "steady", "fading", "reversing", "unclear"}
+
+
+def normalize_momentum(raw: Any) -> dict[str, Any] | None:
+    """حکم فقط وقتی حکم است که جهت داشته باشد؛ آبجکت با مقدارهای null حکم نیست."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    direction = str(raw.get("direction") or "").strip().lower()
+    if direction in ("صعودی", "بالا"):
+        direction = "up"
+    elif direction in ("نزولی", "پایین"):
+        direction = "down"
+    elif direction in ("خنثی", "بازار"):
+        direction = "flat"
+    if direction not in DIRECTIONS:
+        return None
+    out = dict(raw)
+    out["direction"] = direction
+    phase = str(raw.get("phase") or "").strip().lower()
+    out["phase"] = phase if phase in PHASES else "unclear"
+    return out
+
+
 def is_allowed_tool(name: str, allow: Sequence[str] | None, blocked: set[str]) -> bool:
     """ابزار خواندنی آزاد است، ابزار دستوری نه.
 
@@ -384,7 +408,13 @@ class ToolAgent:
         known = {str(t.get("name")) for t in tools if isinstance(t, dict)} | set(self.local_tools)
         system = CONTRACT % {"max_calls": self.max_calls}
         if tools:
-            system += "\nAvailable tools:\n" + json.dumps(tools, ensure_ascii=False)
+            names = ", ".join(str(t.get("name")) for t in tools if isinstance(t, dict))
+            system += (
+                "\nOnly these tool names exist - copy one of them exactly, do not invent names:\n"
+                + names
+                + "\n\nDetails:\n"
+                + json.dumps(tools, ensure_ascii=False)
+            )
         if skill_text:
             system += "\n\nSkill instructions from trade-mcp:\n" + skill_text[:2000]
 
@@ -437,9 +467,9 @@ class ToolAgent:
             if analysis:
                 trace.analysis = analysis[:600]
                 # قرارداد فارسی خواسته است؛ متن انگلیسی یعنی پاسخ ناقص
-                persian = bool(re.search(r"[\u0600-\u06FF]", analysis))
-            momentum = data.get("momentum")
-            if isinstance(momentum, dict) and momentum:
+                persian = len(re.findall(r"[\u0621-\u064A]", analysis)) >= 3
+            momentum = normalize_momentum(data.get("momentum"))
+            if momentum:
                 trace.momentum = momentum
 
             calls = data.get("tool_calls") or []
@@ -572,8 +602,8 @@ class ToolAgent:
             return trace
         trace.last_reply = (reply or "")[-2000:]
         data = parse_agent_reply(reply)
-        momentum = data.get("momentum")
-        if isinstance(momentum, dict) and momentum:
+        momentum = normalize_momentum(data.get("momentum"))
+        if momentum:
             trace.momentum = momentum
         analysis = data.get("analysis")
         if isinstance(analysis, dict):

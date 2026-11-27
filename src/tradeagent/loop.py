@@ -80,6 +80,17 @@ def resolve_harvester_dir(configured: Path) -> Path:
     )
     return configured
 
+def _bridge_says_connected(res: dict[str, Any]) -> bool:
+    """آیا mt5_status می‌گوید اکسپرت وصل است؟"""
+    for key in ("ea_connected", "connected", "expert_connected", "ea_online"):
+        if res.get(key) is True:
+            return True
+    for value in res.values():
+        if isinstance(value, dict) and _bridge_says_connected(value):
+            return True
+    return False
+
+
 def _numbers_in(text: str) -> list[float]:
     """اعداد شبیه قیمت در یک متن (برای سنجش ادعاهای عددی مدل)."""
     import re as _re
@@ -137,31 +148,41 @@ class Runner:
         self._running = True
 
     def wait_for_ea(self, timeout_s: float = 70.0, step_s: float = 4.0) -> dict[str, Any]:
-        """صبر کن تا اکسپرت به پلِ همین پروسه وصل شود.
+        """صبر کن تا اکسپرت به پلِ همین پروسه وصل شود و قیمت بدهد.
 
         سرویس که می‌خوابد، سوکت اکسپرت هم می‌بندد و تا ۶۰ ثانیه بعد دوباره وصل می‌شود؛
-        چرخهٔ --verify درست در همان شکاف می‌افتاد و همهٔ ابزارهای متاتریدر خطا می‌دادند.
+        چرخهٔ --verify درست در همان شکاف می‌افتاد. پاسخ «خالی» هم قبول نیست: تا وقتی
+        قیمتِ نماد نیامده، یعنی اکسپرت جواب نمی‌دهد.
         """
         if self.mcp is None or not getattr(self.mcp, "enabled", False):
             return {"ok": False, "why": "پل MCP خاموش است"}
+        symbol = (self.cfg.symbols or [""])[0]
+        queries = [
+            ("market_snapshot", {"symbol": symbol}),
+            ("get_candles", {"symbol": symbol, "timeframe": "M1", "count": 1}),
+            ("mt5_status", None),
+        ]
         started = time.time()
         last = ""
         while time.time() - started < timeout_s:
-            for tool in ("mt5_status", "account_info"):
+            for tool, args in queries:
                 try:
-                    res = self.mcp.call_tool(tool)
+                    res = self.mcp.call_tool(tool, args) if args else self.mcp.call_tool(tool)
                 except Exception as exc:  # noqa: BLE001
                     last = f"{type(exc).__name__}: {exc}"
                     continue
-                if isinstance(res, dict) and res:
+                price = self._ea_price(res)
+                if price > 0:
                     return {
                         "ok": True,
                         "tool": tool,
                         "after_s": round(time.time() - started, 1),
-                        "price": self._ea_price(res),
+                        "price": price,
                     }
+                if tool == "mt5_status" and isinstance(res, dict) and _bridge_says_connected(res):
+                    last = "mt5_status وصل است ولی قیمت نداد"
             time.sleep(step_s)
-        return {"ok": False, "why": last or "اکسپرت تا پایان مهلت وصل نشد"}
+        return {"ok": False, "why": last or "اکسپرت تا پایان مهلت قیمت نداد"}
 
     def _ea_price(self, first: Any = None) -> float:
         """قیمت همان نماد از متاتریدر (برای هم‌مقیاس‌سنجی؛ اختیاری)."""

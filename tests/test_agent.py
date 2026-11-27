@@ -587,3 +587,24 @@ def test_mcp_call_is_retried_once_when_the_bridge_blinks() -> None:
     trace = agent.run({})
     assert mcp.tries == 2
     assert trace.calls[0].ok
+
+
+def test_momentum_with_null_fields_is_not_a_verdict() -> None:
+    from tradeagent.agent import normalize_momentum
+
+    assert normalize_momentum({"direction": None, "phase": None, "strength": None}) is None
+    assert normalize_momentum({"direction": "UP", "phase": "Fading"}) == {
+        "direction": "up", "phase": "fading",
+    }
+    assert normalize_momentum({"direction": "نزولی"})["direction"] == "down"
+    assert normalize_momentum({"direction": "sideways"}) is None
+
+
+def test_persian_means_letters_not_persian_punctuation() -> None:
+    import re
+
+    def persian(text: str) -> bool:
+        return len(re.findall(r"[\u0621-\u064A]", text)) >= 3
+
+    assert persian("قیمت بالا رفت")
+    assert not persian("price_action: bearish؛ trend_strength: weak")
