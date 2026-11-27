@@ -200,21 +200,22 @@ def mt5_pids() -> list[str]:
 def harvester() -> dict[str, Any]:
     """آیا اکسپرت هاروستر تیک تازه می‌نویسد؟ (bars=0 معمولاً یعنی نه)"""
     root = prefix()
-    dirs = list(root.glob("**/MQL5/Files/harvester"))
+    dirs = [d for d in root.glob("**/MQL5/Files/harvester") if d.is_dir()]
     if not dirs:
         return {"found": False}
     d = max(dirs, key=lambda x: x.stat().st_mtime)
-    files = [f for sub in ("ticks", "bars", "") for f in (d / sub).glob("*") if f.is_file()]
-    if not files:
-        return {"found": True, "dir": str(d), "files": 0, "age_s": None}
-    newest = max(files, key=lambda f: f.stat().st_mtime)
+    ticks = [f for f in (d / "ticks").glob("*") if f.is_file()]
+    bars = [f for f in (d / "bars").glob("*") if f.is_file()]
+    newest = max(ticks, key=lambda f: f.stat().st_mtime) if ticks else None
+    age = int(time.time() - newest.stat().st_mtime) if newest else None
     return {
         "found": True,
         "dir": str(d),
-        "files": len(files),
-        "newest": oldest_name(newest),
-        "age_s": int(time.time() - newest.stat().st_mtime),
-        "size": newest.stat().st_size,
+        "ticks": len(ticks),
+        "bars": len(bars),
+        "newest": newest.name if newest else None,
+        "age_s": age,
+        "size": newest.stat().st_size if newest else 0,
     }
 
 
@@ -253,9 +254,13 @@ def report() -> None:
         print(f"  اعلان متاتریدر: {note[:140]}")
     h = harvester()
     if h.get("found"):
-        age = h.get("age_s")
-        print(f"  هاروستر: {h.get('files')} فایل · تازه‌ترین {h.get('newest')} · {age}s پیش")
-        if isinstance(age, int) and age > 600:
-            print("  ! تیک تازه نمی‌رسد (age > 10min): سرویس با bars=0 کار می‌کند")
+        print(
+            f"  هاروستر: ticks={h.get('ticks')} bars={h.get('bars')} · "
+            f"تازه‌ترین تیک {h.get('newest')} · {h.get('age_s')}s پیش"
+        )
+        if h.get("ticks") == 0:
+            print("  ! هیچ فایل تیکی نیست: اکسپرت TickHarvester روی چارت XAUUSD_i نیست")
+        elif isinstance(h.get("age_s"), int) and h["age_s"] > 600:
+            print("  ! تیک تازه نمی‌رسد (age > 10min): چرخه‌ها bars=0 می‌مانند")
     else:
         print("  هاروستر: پوشه‌ای پیدا نشد")

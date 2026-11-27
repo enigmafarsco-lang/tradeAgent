@@ -280,6 +280,7 @@ def test_diag_reports_harvester_freshness(tmp_path, monkeypatch) -> None:
 
     info = harvester()
     assert info["found"] is True
+    assert info["ticks"] == 1
     assert info["newest"].startswith("XAUUSD_i")
     assert isinstance(info["age_s"], int)
 
