@@ -30,6 +30,26 @@ bad()  { printf '\033[1;31m[gpu]\033[0m %s\n' "$*"; }
 dim()  { printf '\033[2m[gpu] %s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;35m=== %s\033[0m\n' "$*"; }
 
+unit_add_env() {  # unit_add_env KEY VALUE → در سرویس کاربری ollama
+  local unit="$HOME/.config/systemd/user/ollama.service"
+  [[ -f "$unit" ]] || return 1
+  grep -q "^Environment=$1=" "$unit" && return 0
+  python3 - "$unit" "$1" "$2" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text().splitlines()
+out, done = [], False
+for ln in lines:
+    out.append(ln)
+    if ln.startswith("ExecStart=") and not done:
+        out.append(f"Environment={sys.argv[2]}={sys.argv[3]}")
+        done = True
+p.write_text("\n".join(out) + "\n")
+PY
+  systemctl --user daemon-reload 2>/dev/null || true
+  return 0
+}
+
 run_sudo() {  # اجرای دستور با sudo، خروجی هم گرفته می‌شود هم دیده می‌شود
   sudo "$@" 2>&1
 }
@@ -50,6 +70,7 @@ echo "  module on disk: ${MODV:-not found for this kernel}"
 SECURE="no"
 if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi 'SecureBoot enabled'; then SECURE="yes"; fi
 echo "  secure boot : $SECURE"
+MODULES_DIR="${MODULES_DIR:-/lib/modules}"
 PKGS="$(dpkg -l 2>/dev/null | awk '/^ii +nvidia-driver-[0-9]/{print $2}' | tr '\n' ' ')"
 echo "  drivers     : ${PKGS:-none}"
 DKMS_N="$(dkms status 2>/dev/null | grep -c nvidia || true)"
@@ -76,6 +97,21 @@ else
       bad "ماژولی برای این کرنل نصب نیست" ;;
   esac
 fi
+
+SIGNER="$(modinfo -F signer nvidia 2>/dev/null || true)"
+VERMAGIC="$(modinfo -F vermagic nvidia 2>/dev/null | awk '{print $1}' || true)"
+echo "  signer of this kernel's module: ${SIGNER:-none}${VERMAGIC:+ (built for $VERMAGIC)}"
+OTHER_SIGNED=""
+for d in "$MODULES_DIR"/*/; do
+  k="$(basename "$d")"
+  [[ "$k" == "$KERNEL" ]] && continue
+  sgn="$(modinfo -k "$k" -F signer nvidia 2>/dev/null || true)"
+  case "$sgn" in
+    *Canonical*) OTHER_SIGNED="$k"; echo "  kernel $k دارد ماژول امضاشدهٔ Canonical" ;;
+    "") ;;
+    *) echo "  kernel $k دارد ماژول با امضای: $sgn" ;;
+  esac
+done
 
 step "3/5 تلاش: بستهٔ امضاشدهٔ اوبونتو (بدون تغییر BIOS)"
 # بالاترین نسخهٔ نصب‌شده (۵۹۵ بر ۵۹۰ اولویت دارد)؛ اگر نصب نبود، پیشنهاد ubuntu-drivers
@@ -122,6 +158,15 @@ fi
 if (( MODULE_OK )); then
   step "5/5 راه‌اندازی ollama روی کارت NVIDIA"
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sed 's/^/    /'
+  local vram_mib
+  vram_mib="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc '0-9')"
+  if [[ -n "$vram_mib" ]] && (( vram_mib > 0 && vram_mib < 8192 )); then
+    if unit_add_env OLLAMA_CONTEXT_LENGTH 8192; then
+      ok "VRAM ≈ ${vram_mib} MiB: زمینهٔ مدل روی ۸۱۹۲ گذاشته شد تا کامل در کارت جا شود"
+    else
+      warn "VRAM ≈ ${vram_mib} MiB: در سرویس ollama این را بگذار: Environment=OLLAMA_CONTEXT_LENGTH=8192"
+    fi
+  fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
     if systemctl --user restart ollama.service 2>/dev/null; then
       ok "سرویس ollama ری‌استارت شد - از این به بعد CUDA را انتخاب می‌کند"
@@ -134,6 +179,18 @@ if (( MODULE_OK )); then
   echo
   ok "اثبات: ./scripts/setup_llm.sh --hardware   # باید بنویسد 100% GPU روی RTX"
   dim "اگر هم Vulkan فعال مانده باشد، ollama خودش CUDA را ترجیح می‌دهد"
+  exit 0
+fi
+
+if (( MODULE_OK == 0 )) && [[ -n "$OTHER_SIGNED" ]]; then
+  step "4/5 فقط باید به کرنل $OTHER_SIGNED بوت کنی"
+  ok "ماژول NVIDIA امضاشدهٔ Canonical برای کرنل $OTHER_SIGNED نصب است،"
+  ok "ولی تو روی $KERNEL هستی. Secure Boot این امضا را قبول می‌کند."
+  echo "      sudo reboot      # GRUB پیش‌فرض روی جدیدترین کرنل است"
+  echo "      # بعد از بالا آمدن: uname -r   (باید $OTHER_SIGNED باشد)"
+  echo "      ./scripts/fix_nvidia.sh --check && ./scripts/setup_llm.sh --hardware"
+  echo
+  dim "اگر GRUB کرنل قدیمی را بالا آورد: در منوی GRUB «Advanced options» و همان $OTHER_SIGNED را انتخاب کن"
   exit 0
 fi
 
