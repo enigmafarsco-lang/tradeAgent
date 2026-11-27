@@ -218,10 +218,19 @@ def harvester_status(dir_path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        data = json.loads(raw)
-    except (OSError, ValueError):
-        return {"broken": True}
+        blob = path.read_bytes()
+    except OSError:
+        return {}
+    data = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252"):
+        try:
+            data = json.loads(blob.decode(enc))
+            break
+        except (UnicodeDecodeError, ValueError):
+            continue
+    if not isinstance(data, dict):
+        head = blob[:200].decode("utf-8", "replace").replace("\x00", "·")
+        return {"broken": True, "head": head}
     symbols = data.get("symbols") or []
     return {
         "ea": data.get("ea"),
@@ -237,7 +246,22 @@ def harvester_status(dir_path: Path) -> dict[str, Any]:
     }
 
 
-def harvester() -> dict[str, Any]:
+def symbol_ticks(dir_path: Path, symbol: str) -> dict[str, Any]:
+    """وضعیت یک نماد مشخص: چند فایل، تازه‌ترین کدام و چند ثانیه پیش."""
+    files = [f for f in (dir_path / "ticks" / symbol).glob("*.csv") if f.is_file()]
+    if not files:
+        return {"symbol": symbol, "files": 0, "newest": None, "age_s": None, "size": 0}
+    newest = max(files, key=lambda f: f.stat().st_mtime)
+    return {
+        "symbol": symbol,
+        "files": len(files),
+        "newest": newest.name,
+        "age_s": int(time.time() - newest.stat().st_mtime),
+        "size": newest.stat().st_size,
+    }
+
+
+def harvester(watch: Iterable[str] = ("XAUUSD_i",)) -> dict[str, Any]:
     """آیا اکسپرت هاروستر تیک تازه می‌نویسد؟ (bars=0 معمولاً یعنی نه)
 
     چیدمان خودِ اکسپرت: harvester/ticks/<SYMBOL>/<YYYYMMDD>.csv
@@ -259,6 +283,7 @@ def harvester() -> dict[str, Any]:
         "age_s": age,
         "size": newest.stat().st_size if newest else 0,
         "status": harvester_status(d),
+        "watch": [symbol_ticks(d, sym) for sym in watch],
     }
 
 
@@ -357,8 +382,18 @@ def report() -> None:
             f"  هاروستر: csv={h.get('ticks')} · تازه‌ترین "
             f"{h.get('newest_parent') or '-'}/{h.get('newest') or '-'} · {h.get('age_s')}s پیش"
         )
+        for w in h.get("watch") or []:
+            if w["files"] == 0:
+                print(f"    {w['symbol']}: هیچ فایلی نیست — اکسپرت این نماد را انتخاب نکرده")
+            else:
+                print(
+                    f"    {w['symbol']}: {w['files']} فایل · {w['newest']} · "
+                    f"{w['age_s']}s پیش · {w['size']} بایت"
+                )
         st = h.get("status") or {}
-        if st:
+        if st.get("broken"):
+            print(f"    status.json خوانده نشد: {st.get('head')}")
+        elif st:
             syms = ", ".join(
                 f"{x['symbol']}({x['ticks']}t,{x['age_s']}s)" for x in st.get("symbols") or []
             )

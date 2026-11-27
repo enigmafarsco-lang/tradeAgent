@@ -317,3 +317,18 @@ def test_mt5_pids_finds_wine_process_by_comm(tmp_path) -> None:
     mk("4243", "bash", b"bash\x00-c\x00./scripts/start_mt5.sh terminal64.exe\x00")
     mk("4244", "wine64-preloader", b"wine\x00terminal64.exe\x00")
     assert mt5_pids(tmp_path) == ["4242"]
+
+
+def test_diag_reports_the_symbol_the_loop_needs(tmp_path, monkeypatch) -> None:
+    """۸۰ فایل از ۸۰ نماد یعنی هیچ؛ باید بدانیم خودِ XAUUSD_i تازه است یا نه."""
+    from tradeagent.diag import harvester
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    harv = tmp_path / "drive_c/Program Files/MetaTrader 5/MQL5/Files/harvester"
+    (harv / "ticks" / "NAS100_i").mkdir(parents=True)
+    (harv / "ticks" / "NAS100_i" / "20261127.csv").write_text("t;b\n", encoding="utf-8")
+
+    info = harvester()
+    mine = info["watch"][0]
+    assert mine["symbol"] == "XAUUSD_i"
+    assert mine["files"] == 0 and mine["age_s"] is None
