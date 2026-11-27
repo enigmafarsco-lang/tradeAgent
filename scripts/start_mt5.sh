@@ -4,6 +4,7 @@
 #
 #   ./scripts/start_mt5.sh          # اگر باز نباشد، بازش کن و مطمئن شو بالا آمد
 #   ./scripts/start_mt5.sh --check  # فقط بگو باز است یا نه
+#   ./scripts/start_mt5.sh --watch  # هر ۱۰ ثانیه؛ اگر بسته شد دوباره بازش کن
 # ---------------------------------------------------------------------------
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,6 +27,21 @@ running() {
 first_pid() {
   MT5_WINEPREFIX="$PREFIX" "$PY" -c 'from tradeagent.diag import mt5_pids; print((mt5_pids() or ["?"])[0])' 2>/dev/null || echo "?"
 }
+
+if [[ "${1:-}" == "--watch" ]]; then
+  interval="${2:-10}"
+  dim "نگهبان روشن شد (هر ${interval}s بررسی می‌کند). با Ctrl-C ببند."
+  while true; do
+    if ! running; then
+      warn "$(date +%H:%M:%S) متاتریدر بسته بود → بازش می‌کنم"
+      "${BASH_SOURCE[0]}" >/dev/null 2>&1 || bad "$(date +%H:%M:%S) بالا نیامد"
+    fi
+    MT5_WINEPREFIX="$PREFIX" "$PY" -c 'from tradeagent.diag import harvester,harvester_symbol
+h=harvester(); s=harvester_symbol()
+print("  %s ticks=%s age=%ss %s" % (h.get("newest"), h.get("ticks"), h.get("age_s"), ("→ "+s[1]) if s else ""))' 2>/dev/null || true
+    sleep "$interval"
+  done
+fi
 
 if [[ "${1:-}" == "--check" ]]; then
   if running; then ok "terminal64.exe در حال اجراست (pid $(first_pid))"; exit 0; fi

@@ -635,3 +635,23 @@ Tools -> Options -> Expert Advisors
 اگر ترمینال بسته شد، `./scripts/run_gold.sh --status` همان‌جا دو خط آخر Journal و سه خط آخر
 wine را چاپ می‌کند. کرش‌های WebView2 (پنل Community/News) و کمبود حافظه شایع‌ترین‌اند:
 بستن پنل‌های Community/News در متاتریدر معمولاً بس است.
+
+## آیکون دسکتاپ
+
+یک بار:
+
+```bash
+./scripts/install_mt5_shortcut.sh
+```
+
+از این به بعد روی آیکون «MetaTrader» در دسکتاپ کلیک کن؛ متاتریدر باز می‌شود (بدون پنجرهٔ
+کنسول، مستقل از ترمینال). اگر گنوم آیکون را «untrusted» نشان داد: راست‌کلیک → Allow Launching.
+
+نسخهٔ نگهبان هم هست (هر ۱۰ ثانیه، اگر بسته شده بود دوباره بازش می‌کند):
+
+```bash
+./scripts/install_mt5_shortcut.sh --watch
+```
+
+آیکون از `*.ico` خودِ متاتریدر داخل `drive_c/Program Files/MetaTrader 5` ساخته می‌شود؛ اگر
+نبود، از `assets/mt5.png`.

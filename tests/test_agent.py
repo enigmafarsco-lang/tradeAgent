@@ -315,3 +315,23 @@ def test_mt5_crash_output_is_kept(tmp_path, monkeypatch) -> None:
 
     assert mt5_wine_log() == ["err: crash"]
     assert os.getcwd() == str(tmp_path)
+
+
+def test_shortcut_installer_writes_a_launchable_desktop_file(tmp_path) -> None:
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "install_mt5_shortcut.sh"
+    body = script.read_text(encoding="utf-8")
+    assert "--watch" in body
+    assert "--watch" in (root / "scripts" / "start_mt5.sh").read_text(encoding="utf-8")
+
+    env = {**os.environ, "HOME": str(tmp_path)}
+    subprocess.run(["bash", str(script)], check=True, env=env, cwd=root, capture_output=True)
+    desk = tmp_path / "Desktop" / "tradeagent-mt5.desktop"
+    text = desk.read_text(encoding="utf-8")
+    assert "Exec=" in text and str(root / "scripts" / "start_mt5.sh") in text
+    assert "Terminal=false" in text  # کلیک روی آیکون نباید پنجرهٔ کنسول باز کند
+    assert os.access(desk, os.X_OK)
