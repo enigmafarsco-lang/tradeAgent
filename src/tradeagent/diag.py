@@ -358,6 +358,89 @@ def journal_tail(lines: int = 3) -> list[str]:
     return [ln for ln in body if ln.strip()][-lines:]
 
 
+def last_tick_price(root: Path | None = None, symbol: str = "XAUUSD_i") -> dict[str, Any]:
+    """آخرین bid/ask از فایل تیک خودمان (منبع حقیقتِ حلقه)."""
+    h = harvester(watch=(symbol,))
+    if not h.get("found"):
+        return {"ok": False, "why": "پوشهٔ هاروستر پیدا نشد"}
+    base = Path(str(h["dir"])) / "ticks" / symbol
+    files = sorted(base.glob("*.csv"), key=lambda f: f.stat().st_mtime)
+    if not files:
+        return {"ok": False, "why": f"فایل تیکی برای {symbol} نیست"}
+    path = files[-1]
+    try:
+        with path.open("rb") as fh:
+            fh.seek(max(0, path.stat().st_size - 4096))
+            tail = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError as exc:
+        return {"ok": False, "why": str(exc)}
+    for line in reversed(tail):
+        parts = line.rstrip("\r\n").split(";")
+        if len(parts) < 4 or not parts[0].strip().isdigit():
+            continue
+        try:
+            return {
+                "ok": True,
+                "file": path.name,
+                "ts_msc": int(parts[0]),
+                "bid": float(parts[2]),
+                "ask": float(parts[3]),
+            }
+        except (TypeError, ValueError):
+            continue
+    return {"ok": False, "why": "خط تیکِ خوانا در انتهای فایل نبود"}
+
+
+def mt5_price(symbol: str = "XAUUSD_i") -> dict[str, Any]:
+    """قیمت همان نماد از خود متاتریدر (از راه پل MCP)."""
+    try:
+        from .config import Config
+        from .mcp_client import mcp_from_config
+
+        cfg = Config.load("configs/gold.toml") if Path("configs/gold.toml").exists() else Config.load()
+        mcp = mcp_from_config(cfg)
+        if not mcp.enabled or not mcp.start():
+            return {"ok": False, "why": "پل MCP بالا نیامد"}
+        try:
+            for tool, args in (
+                ("market_snapshot", {"symbol": symbol}),
+                ("mt5_status", None),
+            ):
+                try:
+                    res = mcp.call_tool(tool, args) if args else mcp.call_tool(tool)
+                except Exception:  # noqa: BLE001
+                    continue
+                price = _dig_price(res)
+                if price:
+                    return {"ok": True, "tool": tool, "price": price}
+        finally:
+            mcp.stop()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
+    return {"ok": False, "why": "هیچ ابزاری قیمت نداد"}
+
+
+def _dig_price(node: Any, depth: int = 0) -> float:
+    """اولین عدد معقولِ قیمتی در پاسخ ابزار (bid/ask/last/price)."""
+    if depth > 4:
+        return 0.0
+    if isinstance(node, dict):
+        for key in ("bid", "ask", "last", "price", "close", "mark"):
+            value = node.get(key)
+            if isinstance(value, (int, float)) and float(value) > 100:
+                return float(value)
+        for value in node.values():
+            found = _dig_price(value, depth + 1)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in reversed(node[-3:]):
+            found = _dig_price(value, depth + 1)
+            if found:
+                return found
+    return 0.0
+
+
 def mt5_wine_log(lines: int = 4) -> list[str]:
     """خروجی wine که start_mt5.sh ذخیره کرده (کرش/خطا)."""
     path = Path("var/logs/mt5.log")

@@ -19,6 +19,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 "$ROOT/scripts/start_mt5.sh" >"$TMP/mt5.log" 2>&1 || true
 MT5_WINEPREFIX="${MT5_WINEPREFIX:-$HOME/Wine}" "$PY" -c 'from tradeagent.diag import report; report()' >"$TMP/diag.log" 2>&1 || true
+"$PY" -c 'from tradeagent.diag import last_tick_price, mt5_price; import json; print(json.dumps({"ours": last_tick_price(), "theirs": mt5_price()}))' >"$TMP/price.json" 2>&1 || true
 VERIFY_QUIET=1 "$ROOT/scripts/run_gold.sh" --verify >"$TMP/verify.log" 2>&1 || true
 
 "$PY" - "$TMP" <<'PY'
@@ -47,6 +48,31 @@ mom = grab(r"حکم تکانه: (.+)", verify)
 analysis = grab(r"تحلیل: (.{0,120})", verify)
 error = grab(r"ایجنت: .*?error=(.+)", verify, "-")
 
+price_text = (tmp / "price.json").read_text(encoding="utf-8", errors="replace")
+price: dict = {}
+try:
+    start = price_text.find("{")
+    if start >= 0:
+        import json as _json
+
+        price = _json.loads(price_text[start:])
+except ValueError:
+    price = {}
+
+
+def price_line() -> str:
+    ours = price.get("ours") or {}
+    theirs = price.get("theirs") or {}
+    if not ours.get("ok"):
+        return f"قیمت تیک ما: — ({ours.get('why')})"
+    base = f"قیمت تیک ما: {ours.get('bid')}/{ours.get('ask')}"
+    if not theirs.get("ok"):
+        return base + f" | MT5: — ({theirs.get('why')})"
+    diff_bp = abs(float(theirs["price"]) - float(ours["bid"])) / float(ours["bid"]) * 1e4
+    flag = "✅" if diff_bp < 50 else "❌ دو منبع مختلف"
+    return base + f" | MT5: {theirs['price']} ({diff_bp:.0f}bp اختلاف {flag})"
+
+
 def tick_line(text: str) -> tuple[str, str]:
     m = re.search(r"XAUUSD_i: (\d+) فایل · \S+ · (\d+)s پیش", text)
     if m:
@@ -60,8 +86,13 @@ ticks, age = tick_line(diag)
 
 print()
 print("────────── خلاصه ──────────")
-print(f"متاتریدر: {mt5} | پل: {bridge}")
+if bridge == "?":
+    hint = next((ln.strip() for ln in diag.splitlines() if "پل" in ln or "bridge" in ln), "")
+    print(f"متاتریدر: {mt5} | پل: ؟ | {hint[:90]}")
+else:
+    print(f"متاتریدر: {mt5} | پل: {bridge}")
 print(f"تیک XAUUSD_i: {ticks} فایل، آخرین {age} ثانیه پیش")
+print(price_line())
 print(f"چرخه {cycle} | bars={bars} | llm={llm} | equity={equity}")
 print(f"ابزارها: {tools}")
 print(f"اقدام: {action}")

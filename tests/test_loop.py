@@ -492,3 +492,20 @@ def test_verify_quiet_is_read_from_the_environment() -> None:
 
     body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert 'QUIET = os.environ.get("VERIFY_QUIET") == "1"' in body
+
+
+def test_last_tick_price_reads_the_tail_of_the_csv(tmp_path, monkeypatch) -> None:
+    """قیمت «منبع خودمان» باید از آخرین خط فایل خوانده شود، نه از حافظه."""
+    from tradeagent.diag import last_tick_price
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    ticks = tmp_path / "drive_c/Program Files/MetaTrader 5/MQL5/Files/harvester/ticks/XAUUSD_i"
+    ticks.mkdir(parents=True)
+    (ticks / "20261127.csv").write_text(
+        "time_msc;time;bid;ask;last;volume;flags\n"
+        "1700000000000;2026.11.27 10:00:00;3641.10;3641.20;0;1;4\n"
+        "1700000000500;2026.11.27 10:00:00;3642.90;3643.10;0;1;4\n",
+        encoding="utf-8",
+    )
+    got = last_tick_price()
+    assert got["ok"] and got["bid"] == 3642.90 and got["ask"] == 3643.10
