@@ -253,3 +253,36 @@ def test_verify_mode_runs_one_cycle_with_mt5() -> None:
     assert "loop --once --llm" in script
     cli = (root / "src" / "tradeagent" / "cli.py").read_text(encoding="utf-8")
     assert '"--once"' in cli and "force_llm" in cli
+
+
+def test_agent_success_is_reported_as_llm_ok(cfg) -> None:
+    """اگر ایجنت حکم داد، گزارش باید llm=true بدهد، نه false."""
+    from tradeagent.loop import Runner
+
+    runner = Runner(cfg)
+
+    class FakeAgent:
+        def run(self, context, skill_text=""):  # noqa: ANN001, ANN201
+            from tradeagent.agent import AgentTrace
+
+            trace = AgentTrace()
+            trace.analysis = "شتاب صعودی"
+            trace.momentum = {
+                "direction": "up",
+                "phase": "accelerating",
+                "strength": 0.6,
+                "horizon_s": 60,
+                "confidence": 0.6,
+                "reason": "ret_15s مثبت",
+            }
+            return trace
+
+    runner.agent = FakeAgent()
+    runner.advisor.should_consult = lambda cycle, force=False: True  # noqa: ARG005
+    result = runner.run_cycle(now_ts=1_700_000_000, publish=False, force_llm=True)
+    assert result["ok"] is True
+    compact = result.get("compact") or {}
+    assert compact.get("llm") is True
+    # حکم تکانه در گزارش همان چرخه ثبت می‌شود
+    latest = (run_path := __import__("pathlib").Path(result["report_md"]))
+    assert "accelerating" in latest.read_text(encoding="utf-8")

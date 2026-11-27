@@ -475,7 +475,11 @@ class Runner:
                         )
                 if trace.error:
                     result.warnings.append(f"ایجنت: {trace.error}")
-                llm = LLMResult(trace.proposal, {"provider": "agent", **trace.as_dict()})
+                # بدون ok صریح، گزارش همیشه llm=false می‌نوشت حتی وقتی ایجنت موفق بود
+                llm = LLMResult(
+                    trace.proposal,
+                    {"provider": "agent", "ok": not trace.error, **trace.as_dict()},
+                )
                 LOG.info("ایجنت: %s", trace.summary())
             else:
                 llm = self.advisor.consult(context, force=force_llm)
