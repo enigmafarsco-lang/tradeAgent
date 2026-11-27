@@ -187,10 +187,12 @@ def mt5_pids() -> list[str]:
         if not entry.name.isdigit():
             continue
         try:
-            cmd = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if "terminal64.exe" in cmd:
+        # فقط اگر خودِ آرگومان فایل اجرایی باشد؛ نه شلی که این رشته در متنش است
+        args = [a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a]
+        if any(a.rstrip("/").endswith("terminal64.exe") for a in args):
             pids.append(entry.name)
     return pids
 
@@ -224,6 +226,8 @@ def report() -> None:
     """بلوک خوانا برای `run_gold.sh --status`."""
     pids = mt5_pids()
     print(f"  terminal64.exe: {('running (pid ' + ', '.join(pids[:2]) + ')') if pids else 'NOT running - متاتریدر باز نیست'}")
+    if not pids:
+        print("    برای باز کردنِ مستقل از ترمینال: ./scripts/start_mt5.sh")
     info = ea_log()
     if not info.get("found"):
         print(f"  Experts log: هیچ *.log زیر {prefix()} پیدا نشد")

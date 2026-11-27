@@ -282,3 +282,13 @@ def test_diag_reports_harvester_freshness(tmp_path, monkeypatch) -> None:
     assert info["found"] is True
     assert info["newest"].startswith("XAUUSD_i")
     assert isinstance(info["age_s"], int)
+
+
+def test_mt5_pids_ignores_shells_that_mention_the_name() -> None:
+    """شلی که فقط رشتهٔ terminal64.exe را در متن دارد، پروسهٔ متاتریدر نیست."""
+    from tradeagent.diag import mt5_pids
+
+    pids = mt5_pids()
+    for pid in pids:  # هرچه برگشت باید واقعاً آرگومانِ برنامه باشد
+        args = (Path("/proc") / pid / "cmdline").read_bytes().split(b"\x00")
+        assert any(a.rstrip(b"/").endswith(b"terminal64.exe") for a in args)

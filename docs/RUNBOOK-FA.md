@@ -614,3 +614,17 @@ Tools -> Options -> Expert Advisors
 داده بود. حالا `ok = not trace.error` صریح گذاشته می‌شود.
 
 با `--verify` ببین: `"llm": true` و در بخش گزارش، خط `جهت: … · فاز: … · اطمینان: …`.
+
+## متاتریدر خودش بسته می‌شود
+
+اگر `wine terminal64.exe` را از یک پنجرهٔ کنسول اجرا کنی، بستن آن کنسول SIGHUP می‌فرستد و
+ترمینال می‌میرد — نتیجه: هاروستر تیک نمی‌نویسد و چرخه‌ها `bars=0` می‌شوند.
+
+```bash
+./scripts/start_mt5.sh          # setsid + disown، سپس تا ۳۰ ثانیه تأیید بالا آمدن
+./scripts/start_mt5.sh --check  # فقط باز است یا نه
+```
+
+`setsid` بلافاصله در شل «done» چاپ می‌کند؛ این طبیعی است (فرزند در session جدا ادامه
+می‌دهد). تأیید واقعی: `./scripts/run_gold.sh --status` → خط `terminal64.exe: running (pid …)`
+و `هاروستر: … · Xs پیش`.

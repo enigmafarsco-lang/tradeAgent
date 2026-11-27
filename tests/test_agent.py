@@ -286,3 +286,12 @@ def test_agent_success_is_reported_as_llm_ok(cfg) -> None:
     # حکم تکانه در گزارش همان چرخه ثبت می‌شود
     latest = (run_path := __import__("pathlib").Path(result["report_md"]))
     assert "accelerating" in latest.read_text(encoding="utf-8")
+
+
+def test_start_mt5_script_detaches_from_the_terminal() -> None:
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "start_mt5.sh").read_text(encoding="utf-8")
+    assert "setsid" in body and "disown" in body
+    assert "--check" in body
+    assert "from tradeagent.diag import mt5_pids" in body
