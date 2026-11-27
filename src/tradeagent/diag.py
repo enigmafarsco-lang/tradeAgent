@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -181,20 +182,33 @@ def ea_log(extra_dirs: Iterable[str | Path] = ()) -> dict[str, Any]:
     }
 
 
-def mt5_pids() -> list[str]:
+def mt5_pids(proc_root: Path = Path("/proc")) -> list[str]:
+    """پروسه‌های خودِ متاتریدر.
+
+    wine نامِ برنامه را در /proc/<pid>/comm می‌گذارد؛ همان قابل‌اعتماد است. تطبیق با
+    cmdline غلط مثبت می‌داد (هر شلی که رشتهٔ terminal64.exe را در متنش داشت).
+    """
     pids: list[str] = []
-    for entry in Path("/proc").iterdir():
+    for entry in proc_root.iterdir():
         if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text(encoding="utf-8", errors="replace").strip().lower()
+        except OSError:
+            continue
+        if comm.startswith("terminal64"):
+            pids.append(entry.name)
+            continue
+        if comm.startswith(("wine", "bash", "sh", "python")):
             continue
         try:
             raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        # فقط اگر خودِ آرگومان فایل اجرایی باشد؛ نه شلی که این رشته در متنش است
-        args = [a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a]
-        if any(a.rstrip("/").endswith("terminal64.exe") for a in args):
+        args = [a.decode("utf-8", "replace").strip('"') for a in raw.split(b"\x00") if a]
+        if args and args[-1].rstrip("/").lower().endswith("terminal64.exe"):
             pids.append(entry.name)
-    return pids
+    return sorted(pids, key=int)
 
 
 def harvester() -> dict[str, Any]:
@@ -221,6 +235,32 @@ def harvester() -> dict[str, Any]:
 
 def oldest_name(path: Path) -> str:
     return path.name
+
+
+HARVESTER_SYMBOL = re.compile(r"expert\s+(\w*Harvester)\s+\(([A-Za-z0-9_.\-]+),")
+
+
+def harvester_symbol() -> tuple[str, str] | None:
+    """آخرین بار اکسپرت هاروستر روی کدام نماد بالا آمده؟ (نماد اشتباه = تیک طلا نمی‌آید)"""
+    root = prefix()
+    files = [
+        f
+        for pat in ("Program Files/MetaTrader 5/logs/*.log", "**/MQL5/Logs/*.log")
+        for f in root.glob(pat)
+    ]
+    best: tuple[float, str, str] | None = None
+    for f in files:
+        mtime = f.stat().st_mtime
+        if best and mtime < best[0]:
+            continue
+        for line in reversed(read_log(f)):
+            m = HARVESTER_SYMBOL.search(line)
+            if m:
+                best = (mtime, m.group(1), m.group(2))
+                break
+    if not best:
+        return None
+    return best[1], best[2]
 
 
 def journal_tail(lines: int = 3) -> list[str]:
@@ -292,6 +332,9 @@ def report() -> None:
             f"  هاروستر: ticks={h.get('ticks')} bars={h.get('bars')} · "
             f"تازه‌ترین تیک {h.get('newest')} · {h.get('age_s')}s پیش"
         )
+        sym = harvester_symbol()
+        if sym and not sym[1].startswith("XAUUSD"):
+            print(f"  ! اکسپرت {sym[0]} روی چارت «{sym[1]}» است، نه XAUUSD_i → تیک طلا نمی‌آید")
         if h.get("ticks") == 0:
             print("  ! هیچ فایل تیکی نیست: اکسپرت TickHarvester روی چارت XAUUSD_i نیست")
         elif isinstance(h.get("age_s"), int) and h["age_s"] > 600:

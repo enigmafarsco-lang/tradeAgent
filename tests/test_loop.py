@@ -293,3 +293,19 @@ def test_mt5_pids_ignores_shells_that_mention_the_name() -> None:
     for pid in pids:  # هرچه برگشت باید واقعاً آرگومانِ برنامه باشد
         args = (Path("/proc") / pid / "cmdline").read_bytes().split(b"\x00")
         assert any(a.rstrip(b"/").endswith(b"terminal64.exe") for a in args)
+
+
+def test_mt5_pids_finds_wine_process_by_comm(tmp_path) -> None:
+    """wine نامِ برنامه را در comm می‌گذارد؛ همان باید کافی باشد."""
+    from tradeagent.diag import mt5_pids
+
+    def mk(pid: str, comm: str, argv: bytes = b"\x00") -> None:
+        d = tmp_path / pid
+        d.mkdir()
+        (d / "comm").write_text(comm + "\n", encoding="utf-8")
+        (d / "cmdline").write_bytes(argv)
+
+    mk("4242", "terminal64.exe", b"Z:\\t\\terminal64.exe\x00/portable\x00")
+    mk("4243", "bash", b"bash\x00-c\x00./scripts/start_mt5.sh terminal64.exe\x00")
+    mk("4244", "wine64-preloader", b"wine\x00terminal64.exe\x00")
+    assert mt5_pids(tmp_path) == ["4242"]
