@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "updated_ts": "2026-11-27T10:19:58Z",
-  "cycle": 103,
+  "updated_ts": "2026-11-27T10:24:58Z",
+  "cycle": 104,
   "balance": 9618.6438,
   "equity": 9618.6438,
   "peak_equity": 10000.0,
@@ -30,8 +30,8 @@
   },
   "policy": {
     "variant": "meanrev",
-    "level": 4,
-    "version": 6,
+    "level": 5,
+    "version": 7,
     "source": "adaptive"
   },
   "day": "2026-11-27"
