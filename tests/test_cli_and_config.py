@@ -207,3 +207,17 @@ def test_lockfile_keeps_a_fresh_unknown_lock(tmp_path: Path) -> None:
     os_utime = __import__("os").utime
     os_utime(path, (time.time(), time.time()))
     assert LockFile(path, stale_after_s=60).acquire() is False
+
+
+def test_gold_config_allows_a_whole_cycle_of_model_calls() -> None:
+    """سقف ساعتی مدل باید دست‌کم یک چرخهٔ چنددوره‌ای را تحمل کند."""
+    from pathlib import Path
+
+    import tomllib
+
+    cfg = tomllib.loads((Path(__file__).resolve().parents[1] / "configs" / "gold.toml").read_text(encoding="utf-8"))
+    llm = cfg.get("llm", {})
+    agent = cfg.get("agent", {})
+    per_hour = int(llm.get("max_calls_per_hour", 12))
+    rounds = int(agent.get("max_rounds", 3))
+    assert per_hour >= rounds * 10, "با ۲۰ فراخوانی در ساعت، ایجنت وسط کار می‌خوابد"

@@ -191,8 +191,13 @@ except ValueError:
 
 agent = data.get("agent") or {}
 compact = data.get("compact") or {}
+try:
+    st = json.loads(pathlib.Path("var/llm_calls.json").read_text(encoding="utf-8"))
+    calls = len([c for c in (st.get("calls") or []) if c])
+except Exception:
+    calls = "?"
 print(f"  چرخه {data.get('cycle')} | llm={compact.get('llm')} | bars={compact.get('bars')} "
-      f"| equity={data.get('equity')}")
+      f"| equity={data.get('equity')} | فراخوانی مدل در ساعت گذشته={calls}")
 print(f"  سیاست: {data.get('policy')}")
 if agent:
     print(f"  ایجنت: rounds={agent.get('rounds')} repairs={agent.get('repairs')} "

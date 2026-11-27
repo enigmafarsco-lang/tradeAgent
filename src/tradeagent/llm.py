@@ -238,7 +238,10 @@ class LLMAdvisor:
         if not ok:
             raise RuntimeError(why or "مدل در دسترس نیست")
         if self.calls_last_hour() >= self.max_calls_per_hour:
-            raise RuntimeError(f"سهمیهٔ ساعتی مدل ({self.max_calls_per_hour}) پر است")
+            raise RuntimeError(
+                f"سهمیهٔ ساعتی مدل ({self.max_calls_per_hour}) پر است — "
+                "llm.max_calls_per_hour را در کانفیگ بالا ببر"
+            )
         self._record_call()
         if self.provider == "ollama":
             url = f"{self.ollama_url}/api/chat"

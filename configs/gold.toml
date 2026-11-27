@@ -22,7 +22,7 @@ provider = "ollama"
 ollama_url = "http://127.0.0.1:11434"
 ollama_model = "qwen2.5:7b-instruct"
 every_cycles = 1          # برای طلا هر چرخه از مدل بپرس
-max_calls_per_hour = 20
+max_calls_per_hour = 300   # ایجنت تا ۳ فراخوانی در هر چرخه لازم دارد
 timeout_s = 90
 
 [mcp]
