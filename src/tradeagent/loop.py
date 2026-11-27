@@ -137,20 +137,36 @@ class Runner:
 
     def _local_tools(self) -> dict[str, Any]:
         """ابزارهای محلی روی تیک‌های خودمان: بدون MT5 هم ایجنت داده دارد."""
+        def _sym(symbol: str | None = None) -> str:
+            """نام نماد را به آنچه واقعاً در دیتابیس هست نگاشت کن (XAUUSD ↔ XAUUSD_i)."""
+            wanted = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            return self.store.resolve_symbol(wanted)
+
         def _bars(symbol: str | None = None, seconds: int = 1, count: int = 60) -> list:
-            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            sym = _sym(symbol)
             horizon = max(30, int(seconds) * max(1, int(count)))
             return self.store.recent_bars(sym, horizon)
 
         def local_tick_digest(symbol: str | None = None, **_kw: Any) -> dict:
-            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
-            return tick_digest(self.store.recent_bars(sym, 1200))
+            sym = _sym(symbol)
+            bars = self.store.recent_bars(sym, 1200)
+            if not bars:
+                return {
+                    "symbol": sym,
+                    "error": "بدون کندل برای این نام",
+                    "available_symbols": self.store.symbols(),
+                }
+            return {"symbol": sym, **tick_digest(bars)}
 
         def local_candles(symbol: str | None = None, seconds: int = 5, count: int = 12, **_kw: Any) -> dict:
-            sym = symbol or (self.cfg.symbols or ["XAUUSD"])[0]
+            sym = _sym(symbol)
             bars = self.store.recent_bars(sym, max(120, int(seconds) * int(count) * 2))
             if not bars:
-                return {"symbol": sym, "error": "بدون کندل (فید قطع است)"}
+                return {
+                    "symbol": sym,
+                    "error": "بدون کندل برای این نام",
+                    "available_symbols": self.store.symbols(),
+                }
             step = max(1, int(seconds))
             out = []
             chunk: list = []

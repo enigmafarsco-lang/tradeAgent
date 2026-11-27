@@ -349,3 +349,25 @@ def test_status_json_with_a_datetime_uptime_is_still_readable(tmp_path, monkeypa
     assert st["broken"] is True
     assert st["polls"] == 812 and st["total_ticks"] == 15234 and st["errors"] == 3
     assert st["symbols"] == [{"symbol": "XAUUSD_i", "ticks": 15234, "age_s": 3}]
+
+
+def test_local_tools_resolve_the_symbol_name_the_model_uses(cfg: Config) -> None:
+    """مدل «XAUUSD» می‌نویسد ولی داده با «XAUUSD_i» ذخیره شده؛ نباید خالی برگردد."""
+    from tradeagent.ticks import Bar
+
+    runner = Runner(cfg)
+    now = 1_700_000_000
+    runner.store.add_bars(
+        "XAUUSD_i",
+        [
+            Bar(t=now + i, open=4000 + i, high=4001 + i, low=3999 + i, close=4000.5 + i,
+                bid_close=4000.4 + i, ask_close=4000.6 + i, spread_bps_max=1.0, ticks=5, volume=1.0)
+            for i in range(6)
+        ],
+    )
+    tools = runner._local_tools()
+    dig = tools["local_tick_digest"](symbol="XAUUSD")
+    assert "error" not in dig
+    assert dig["symbol"] == "XAUUSD_i" and dig["bars"] == 6
+    cand = tools["local_candles"](symbol="xauusd", seconds=1, count=3)
+    assert cand["symbol"] == "XAUUSD_i" and cand["candles"]

@@ -251,6 +251,39 @@ class Store:
         out.reverse()
         return out
 
+    def symbols(self) -> list[str]:
+        rows = self.conn.execute("SELECT DISTINCT symbol FROM bars ORDER BY symbol").fetchall()
+        return [str(r["symbol"]) for r in rows]
+
+    def resolve_symbol(self, symbol: str | None) -> str:
+        """نامی که مدل می‌نویسد همیشه دقیقاً برابر نام فایل/دیتابیس نیست.
+
+        ``XAUUSD`` در برابر ``XAUUSD_i`` و بالعکس، حروف کوچک/بزرگ، و پیشوند/پسوند بروکر.
+        """
+        name = (symbol or "").strip()
+        if not name:
+            return name
+        known = {s.lower(): s for s in self.symbols()}
+        if not known:
+            return name
+        low = name.lower()
+        tries = [low]
+        if low.endswith("_i"):
+            tries.append(low[:-2])
+        else:
+            tries.append(low + "_i")
+        tries += [low.replace(".", ""), low.replace("_", ""), low.split(".")[0]]
+        for cand in tries:
+            if cand in known:
+                return known[cand]
+        # تنها یک نماد در دیتابیس؟ همان را بده، ولی نامِ خواسته‌شده را لو بده
+        if len(known) == 1:
+            return next(iter(known.values()))
+        for key, real in known.items():
+            if key.startswith(low) or low.startswith(key):
+                return real
+        return name
+
     def bar_count(self, symbol: str) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM bars WHERE symbol=?", (symbol,)).fetchone()
         return int(row["n"]) if row else 0
