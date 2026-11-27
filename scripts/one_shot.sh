@@ -106,6 +106,10 @@ if error not in ("-", "?"):
 bad = []
 if llm != "True":
     bad.append("مدل جواب نداد")
+if mom.strip() in ("مدل برنگرداند", "?", "—") or "None" in mom:
+    bad.append("حکم تکانه نیامد")
+if "غیرمجاز" in tools or "ابزار ناشناخته" in tools:
+    bad.append("مدل ابزار اشتباه صدا زد")
 if bars in ("0", "?"):
     bad.append("کندلی نیامد")
 if ticks == "0":

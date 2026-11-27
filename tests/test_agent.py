@@ -498,3 +498,59 @@ def test_tool_result_from_another_instrument_is_flagged() -> None:
     assert trace.calls[0].note, "باید هشدار ناهم‌مقیاس بودن داشته باشد"
     assert "3636" in trace.calls[0].note
     assert "note" in seen[1][-1]["content"]
+
+
+def test_final_round_only_asks_for_the_verdict() -> None:
+    """اگر مدل در دورهای ابزاری حکم نداد، یک دور آخر «فقط حکم» گرفته شود."""
+    tool_reply = json.dumps(
+        {
+            "analysis": "تحلیل",
+            "tool_calls": [{"tool": "local_tick_digest", "arguments": {}}],
+            "momentum": None,
+            "proposal": None,
+        }
+    )
+    verdict = json.dumps(
+        {
+            "analysis": "قیمت صعودی است",
+            "tool_calls": [],
+            "momentum": {"direction": "up", "phase": "accelerating", "strength": 0.6,
+                         "horizon_s": 120, "confidence": 0.7, "reason": "شتاب"},
+            "proposal": None,
+        }
+    )
+    seen: list[list[dict[str, str]]] = []
+
+    def chat(messages):  # noqa: ANN001
+        seen.append(list(messages))
+        return tool_reply if "ابزار تمام شد" not in messages[-1]["content"] else verdict
+
+    agent = ToolAgent(
+        chat=chat,
+        mcp=None,
+        local_tools={"local_tick_digest": lambda **_: {"last_price": 1.0}},
+        max_rounds=2,
+    )
+    trace = agent.run({})
+    assert trace.momentum and trace.momentum["direction"] == "up"
+    assert any("ابزار تمام شد" in m["content"] for m in seen[-1])
+
+
+def test_unknown_tool_lists_every_name() -> None:
+    from tradeagent.agent import ToolAgent
+
+    agent = ToolAgent(
+        chat=lambda m: json.dumps(
+            {
+                "analysis": "x",
+                "tool_calls": [{"tool": "BollingerBands", "arguments": {}}],
+                "momentum": {"direction": "flat", "phase": "unclear"},
+                "proposal": None,
+            }
+        ),
+        mcp=None,
+        local_tools={"local_tick_digest": lambda **_: {}},
+        max_rounds=1,
+    )
+    trace = agent.run({})
+    assert "local_tick_digest" in trace.calls[0].error

@@ -454,8 +454,37 @@ def mt5_wine_log(lines: int = 4) -> list[str]:
     return [ln for ln in raw if ln.strip()][-lines:]
 
 
+def bridge_state(path: Path | None = None) -> dict[str, Any]:
+    """وضعیت پل همان‌طور که سرویس روی دیسک نوشته است."""
+    for candidate in (path, Path("var/mcp_status.json"), Path("var") / "state" / "mcp_status.json"):
+        if candidate and Path(candidate).exists():
+            try:
+                data = json.loads(Path(candidate).read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                return {"error": "mcp_status.json خوانده نشد"}
+            bridge = data.get("bridge") if isinstance(data, dict) else {}
+            if not isinstance(bridge, dict):
+                bridge = {}
+            return {
+                "listen": bridge.get("listen") or data.get("listen") if isinstance(data, dict) else None,
+                "socket": bridge.get("socket"),
+                "ea_connected": bridge.get("ea_connected"),
+                "peer": bridge.get("peer"),
+                "age_s": data.get("age_s") if isinstance(data, dict) else None,
+            }
+    return {"error": "mcp_status.json نیست (سرویس بالا نیست)"}
+
+
 def report() -> None:
     """بلوک خوانا برای `run_gold.sh --status`."""
+    b = bridge_state()
+    if "error" in b:
+        print(f"  پل: {b['error']}")
+    else:
+        print(
+            f"  bridge={b.get('listen')} socket={b.get('socket')} "
+            f"ea_connected={b.get('ea_connected')} peer={b.get('peer')}"
+        )
     pids = mt5_pids()
     print(f"  terminal64.exe: {('running (pid ' + ', '.join(pids[:2]) + ')') if pids else 'NOT running - متاتریدر باز نیست'}")
     if not pids:

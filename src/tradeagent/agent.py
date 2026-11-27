@@ -291,7 +291,7 @@ class ToolAgent:
                 tool=name,
                 arguments=args,
                 ok=False,
-                error="ابزار ناشناخته؛ از این‌ها انتخاب کن: " + ", ".join(sorted(known)[:25]),
+                error="ابزار ناشناخته؛ فقط این نام‌ها وجود دارند: " + ", ".join(sorted(known)),
             )
         if name in self.local_tools:
             if budget <= 0:
@@ -514,4 +514,45 @@ class ToolAgent:
                 messages.append(
                     {"role": "user", "content": "Tool budget is exhausted. Give your final proposal now."}
                 )
+        return self._final_verdict(trace, messages)
+
+    # -- دور آخر: فقط حکم ------------------------------------------------
+    def _final_verdict(self, trace: AgentTrace, messages: list[dict[str, str]]) -> AgentTrace:
+        """دور آخر ابزار ممنوع است؛ فقط حکم.
+
+        مدل ۷B در دورهای ابزاری همهٔ بودجه‌اش را خرج می‌کرد و دست‌خالی برمی‌گشت
+        (momentum=None) — بعد هیچ حکمی برای معامله وجود نداشت.
+        """
+        if trace.momentum and trace.analysis:
+            return trace
+        final = messages + [
+            {
+                "role": "user",
+                "content": (
+                    "ابزار تمام شد. دیگر هیچ tool_calls نفرست. فقط و فقط یک آبجکت JSON بفرست با "
+                    "کلیدهای \"analysis\" (یک جملهٔ فارسی) و \"momentum\" "
+                    '{"direction":"up|down|flat","phase":"accelerating|steady|fading|reversing|unclear",'
+                    '"strength":0.0-1.0,"horizon_s":5-900,"confidence":0.0-1.0,'
+                    '"reason":"یک جملهٔ فارسی"} و '
+                    '"proposal": null. اگر داده کم بود، direction را flat بگذار و در analysis بگو چرا.'
+                ),
+            }
+        ]
+        try:
+            reply = self.chat(final)
+        except Exception as exc:  # noqa: BLE001
+            trace.error = trace.error or f"{type(exc).__name__}: {exc}"
+            return trace
+        trace.last_reply = (reply or "")[-2000:]
+        data = parse_agent_reply(reply)
+        momentum = data.get("momentum")
+        if isinstance(momentum, dict) and momentum:
+            trace.momentum = momentum
+        analysis = data.get("analysis")
+        if isinstance(analysis, dict):
+            analysis = "؛ ".join(f"{k}: {v}" for k, v in analysis.items())
+        if analysis and str(analysis).strip():
+            trace.analysis = str(analysis).strip()[:600]
+        if not trace.momentum:
+            trace.error = trace.error or "مدل در دور آخر هم حکم نداد"
         return trace
