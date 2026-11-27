@@ -443,7 +443,16 @@ WantedBy=default.target
 UNIT
   systemctl --user daemon-reload 2>/dev/null
   if systemctl --user enable --now ollama.service 2>/dev/null; then
-    ok "user service installed: ollama.service (survives logout/reboot: loginctl enable-linger $USER)"
+    ok "user service installed: ollama.service"
+    if command -v loginctl >/dev/null 2>&1; then
+      if loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes'; then
+        dim "linger already enabled - the service also starts at boot without login"
+      elif loginctl enable-linger "$USER" 2>/dev/null; then
+        ok "linger enabled - the model server starts at boot, no login needed"
+      else
+        warn "could not enable linger (one-time auth): sudo loginctl enable-linger $USER"
+      fi
+    fi
     return 0
   fi
   return 2

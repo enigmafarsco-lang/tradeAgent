@@ -63,10 +63,12 @@
 | iGPU | Intel Arc Graphics (Meteor Lake) |
 | dGPU | NVIDIA RTX 4050 Max-Q — **درایور در دسترس نیست** (`nvidia-smi` خطا) |
 | NPU | Meteor Lake — Ollama پشتیبانی نمی‌کند |
-| اجرای فعلی مدل | `100% CPU` (`size_vram = 0`) |
+| اجرای فعلی مدل | **`100% GPU`** روی Intel Arc با Vulkan، ۶.۶GB در VRAM |
 
-دو راه برای GPU: نصب درایور NVIDIA (`ubuntu-drivers install` + ریبوت) یا استفاده از
-Arc با Vulkan (`mesa-vulkan-drivers` + `--gpu-vulkan`). هر دو sudo می‌خواهند.
+مسیر Arc با Vulkan انجام شد (`--gpu-vulkan`، mesa 25.2.8): `ollama ps` می‌گوید
+`100% GPU`. مسیر NVIDIA هنوز بسته است چون **Secure Boot روشن** است و ماژول DKMS
+بار نمی‌شود (`dkms status` صفر ورودی، دو درایور ۵۹۰ و ۵۹۵ نصب)؛ راه‌حل: ثبت کلید MOK
+یا خاموش‌کردن Secure Boot، بعد purge درایور قدیمی و ریبوت. GPU لازم نیست.
 
 ## نگهبان ضبط (watchdog)
 

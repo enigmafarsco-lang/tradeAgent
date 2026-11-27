@@ -155,8 +155,48 @@ PROV="$(grep -s '^TRADEAGENT_LLM_PROVIDER=' "$ENVF" 2>/dev/null | cut -d= -f2- |
 OURL="$(grep -s '^TRADEAGENT_OLLAMA_URL=' "$ENVF" 2>/dev/null | cut -d= -f2- | head -n1)"
 OURL="${OURL:-http://127.0.0.1:11434}"
 if [[ -n "$GKEY" ]]; then pass "gemini key present (${#GKEY} chars)"; else warn "no gemini key in .env"; fi
+OMODEL="$(grep -s '^TRADEAGENT_OLLAMA_MODEL=' "$ENVF" 2>/dev/null | cut -d= -f2- | head -n1)"
+OMODEL="${OMODEL:-qwen2.5:7b-instruct}"
 if curl -s --max-time 4 "$OURL/api/tags" 2>/dev/null | grep -q '"models"'; then
   pass "ollama reachable at $OURL"
+  # پاسخ واقعی: باید یک JSON برگرداند، نه فقط پورت باز باشد
+  T0="$(date +%s)"
+  PAYLOAD="$(python3 -c '
+import json, sys
+print(json.dumps({"model": sys.argv[1], "stream": False, "format": "json",
+                  "keep_alive": "30m",
+                  "options": {"temperature": 0, "num_predict": 24},
+                  "messages": [{"role": "user", "content": "Reply with JSON {\"ok\": true} and nothing else."}]}))
+' "$OMODEL" 2>/dev/null)"
+  RESP="$(curl -s --max-time 180 -H 'Content-Type: application/json' -d "$PAYLOAD" "$OURL/api/chat" 2>/dev/null)"
+  ELAPSED=$(( $(date +%s) - T0 ))
+  if printf '%s' "$RESP" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+c = (d.get("message") or {}).get("content", "")
+try:
+    json.loads(c)
+except Exception:
+    sys.exit(1)
+' 2>/dev/null; then
+    pass "model $OMODEL answered with JSON in ${ELAPSED}s"
+  else
+    warn "ollama is up but $OMODEL gave no usable JSON in ${ELAPSED}s (first load can be slow)"
+  fi
+  VRAM="$(curl -s --max-time 4 "$OURL/api/ps" | python3 -c '
+import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+for m in d.get("models",[]): print(int(m.get("size_vram") or 0))
+' 2>/dev/null | head -n1)"
+  if [[ "${VRAM:-0}" -gt 0 ]]; then
+    pass "running on a GPU ($(awk -v v="$VRAM" 'BEGIN{printf "%.1f", v/1e9}') GB in VRAM)"
+  else
+    say "  (CPU inference - no VRAM reported)"
+  fi
 else
   warn "ollama not reachable at $OURL"
 fi
