@@ -184,3 +184,26 @@ def test_doctor_falls_back_to_mtime_when_status_is_half_written(tmp_path):
     # فایل تازه است → mtime می‌گوید سالم، نه هشدار «اکسپرت اجرا نشده»
     assert data_check.status == "ok", data_check.detail
     assert "s پیش" in data_check.detail
+
+
+def test_lockfile_recovers_from_a_dead_owner(tmp_path: Path) -> None:
+    import os
+    import time
+
+    path = tmp_path / "dead.lock"
+    path.write_text("999999 2026-01-01T00:00:00Z\n", encoding="utf-8")
+    os.utime(path, (time.time() - 10, time.time() - 10))
+    lock = LockFile(path, stale_after_s=60)   # سن کم، ولی صاحبش مرده است
+    assert lock.acquire() is True
+    assert str(os.getpid()) in path.read_text(encoding="utf-8")
+    lock.release()
+
+
+def test_lockfile_keeps_a_fresh_unknown_lock(tmp_path: Path) -> None:
+    import time
+
+    path = tmp_path / "anon.lock"
+    path.write_text("garbage", encoding="utf-8")
+    os_utime = __import__("os").utime
+    os_utime(path, (time.time(), time.time()))
+    assert LockFile(path, stale_after_s=60).acquire() is False

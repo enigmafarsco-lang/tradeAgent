@@ -188,23 +188,38 @@ def render_markdown(result: CycleResult, extra: dict[str, Any] | None = None) ->
         lines.append("_داده‌ی ورودی در این چرخه ثبت نشد (هیچ نمادی خوانده نشد)._")
     lines.append("")
 
-    # پیش‌بینی روند از تیک ثانیه
-    nc = result.extra.get("nowcast") or {}
-    if isinstance(nc, dict) and nc:
-        lines.append("**پیش‌بینی روند (nowcast از حرکت ثانیه‌ای):**")
+    # قضاوت روند توسط ایجنت (نه یک فرمول پایتونی)
+    momentum = result.extra.get("momentum") or {}
+    stats = result.extra.get("forecast_stats") or {}
+    if momentum or (stats and stats.get("n")):
+        lines.append("**روند از نگاه ایجنت (بر پایهٔ حرکت ثانیه‌ای):**")
         lines.append("")
-        lines.append("| نماد | p(up) | انتظار | دقت آزمون | نمونه | افق |")
-        lines.append("|---|---|---|---|---|---|")
-        for sym, item in list(nc.items())[:10]:
-            samples = item.get("samples") or {}
+        if momentum:
             lines.append(
-                f"| {sym} | {item.get('prob_up', 0.5):.2f} | {item.get('expected_bps', 0):+.1f}bp | "
-                f"{item.get('hit_rate', 0):.0%} | {samples.get('test', 0)} | {item.get('horizon_s', 0)}s |"
+                f"- جهت: **{momentum.get('direction', '?')}** · فاز: `{momentum.get('phase', '?')}` · "
+                f"قدرت: {float(momentum.get('strength', 0) or 0):.2f} · "
+                f"افق: {momentum.get('horizon_s', '?')}s · اطمینان: {float(momentum.get('confidence', 0) or 0):.2f}"
+            )
+            if momentum.get("reason"):
+                lines.append(f"- استدلال مدل: {str(momentum['reason'])[:300]}")
+        if stats and stats.get("n"):
+            lines.append(
+                f"- کارنامهٔ پیش‌بینی‌های ایجنت: {stats.get('hit_rate', 0):.0%} درست "
+                f"({stats.get('n')} پیش‌بینی نمره‌داده‌شده، وزنی "
+                f"{stats.get('weighted_hit_rate', 0):.0%}، در انتظار {stats.get('pending', 0)})"
             )
         lines.append("")
-        lines.append("_دقت روی نمونهٔ آزمون است (آموزش روی گذشته، آزمون روی ادامهٔ همان سری)؛ "
-                     "۵۰٪ یعنی مدل چیزی یاد نگرفته._")
-        lines.append("")
+
+    digest = result.extra.get("digest") or {}
+    if digest:
+        first = next(iter(digest.values()))
+        if isinstance(first, dict) and "ret_15s_bp" in first:
+            lines.append(
+                f"_خلاصهٔ عددی حرکت به مدل داده شد: بازده ۵/۱۵/۳۰/۶۰ ثانیه، تغییر سرعت، "
+                f"سهم تیک صعودی و اسپرد (نمونه: {list(digest)[0]} ۱۵s="
+                f"{first.get('ret_15s_bp')}bp)._"
+            )
+            lines.append("")
 
     # ۶) مدل زبانی
     lines.append("## ۶) مدل زبانی")

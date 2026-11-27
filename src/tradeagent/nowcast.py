@@ -1,183 +1,209 @@
-"""حس پیش‌بینی روند از تیک‌های ثانیه‌ای (nowcast).
+"""خوراک ایجنت: خلاصهٔ حرکت ثانیه‌ای + دفتر پیش‌بینی‌ها.
 
-سؤال: از حرکت ثانیه‌به‌ثانیهٔ قیمت، آیا می‌شود جهت/شتاب کندل بعدی را حدس زد؟
+**تصمیم با ایجنت است، نه با پایتون.**
 
-مدل: پرسپترون کوچک روی چهار ویژگی که از خود کندل‌های یک‌ثانیه‌ای ساخته می‌شوند:
-
-    r_fast   بازده ۵ ثانیهٔ اخیر (سرعت)
-    accel    تغییر سرعت (شتاب): r_fast - r_fast قبلی
-    r_slow   بازده ۳۰ ثانیهٔ اخیر (روند)
-    imb      عدم‌تعادل تیک‌های صعودی/نزولی در پنجره
-
-برچسب: علامت بازده ``horizon_s`` ثانیه بعد.
-
-مهم: دقت **اندازه‌گیری می‌شود** (walk-forward: آموزش روی گذشته، آزمون روی ادامهٔ
-همان سری) و با Brier score گزارش می‌شود. اگر مدل چیزی یاد نگرفته باشد، همان را
-می‌گوییم، نه اینکه ادعا کنیم روند را می‌شناسیم.
+این ماژول فقط *اعداد* را آماده می‌کند (سرعت، شتاب، دامنه، عدم‌تعادل تیک، اسپرد) و
+به مدل می‌دهد؛ خودِ قضاوت «روند چیست، شتاب دارد یا تحلیل می‌رود، کِی برمی‌گردد» کار
+مدل زبانی است. بعد از آن، همین ماژول پیش‌بینی مدل را ثبت می‌کند و وقتی افقش سر رسید،
+با قیمت واقعی نمره می‌دهد - تا بدانیم ایجنت چقدر درست می‌گوید.
 """
 
 from __future__ import annotations
 
-import math
+import json
+import logging
+import time
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Any, Sequence
 
 from .ticks import Bar
 
+LOG = logging.getLogger("tradeagent.digest")
 
-def _log(x: float) -> float:
-    return math.log(x) if x > 0 else 0.0
+WINDOWS = (5, 15, 30, 60, 120)
+
+
+def _ret_bp(now: float, then: float) -> float:
+    if now <= 0 or then <= 0:
+        return 0.0
+    return (now / then - 1.0) * 1e4
+
+
+def tick_digest(bars: Sequence[Bar], windows: Sequence[int] = WINDOWS) -> dict[str, Any]:
+    """عددهای خام حرکت برای مدل: هیچ تفسیری اینجا انجام نمی‌شود."""
+    if not bars:
+        return {}
+    bars = list(bars)
+    close = bars[-1].close
+    out: dict[str, Any] = {
+        "last_price": round(close, 6),
+        "last_ts": int(bars[-1].t),
+        "bars": len(bars),
+        "spread_bps": round(bars[-1].spread_bps, 3),
+    }
+    for w in windows:
+        j = max(0, len(bars) - 1 - w)
+        base = bars[j].close
+        seg = bars[j:]
+        highs = max(b.high for b in seg) or close
+        lows = min(b.low for b in seg) or close
+        ups = sum(1 for k in range(1, len(seg)) if seg[k].close >= seg[k - 1].close)
+        out[f"ret_{w}s_bp"] = round(_ret_bp(close, base), 2)
+        out[f"range_{w}s_bp"] = round(_ret_bp(highs, lows), 2)
+        out[f"up_frac_{w}s"] = round(ups / max(1, len(seg) - 1), 3)
+
+    # شتاب: تغییر سرعت بین دو نیمهٔ پنجرهٔ کوتاه
+    half = max(2, len(bars) // 2)
+    first, second = bars[:half], bars[half:]
+    v1 = _ret_bp(first[-1].close, first[0].close) / max(1, half)
+    v2 = _ret_bp(second[-1].close, second[0].close) / max(1, len(second))
+    out["velocity_change_bp_per_s"] = round(v2 - v1, 5)
+
+    # کندل‌های آخر برای «شکل» حرکت (مدل خودش تفسیر کند)
+    tail = bars[-10:]
+    out["last_10_closes"] = [round(b.close, 6) for b in tail]
+    out["ticks_per_bar_avg"] = round(sum(b.ticks for b in bars[-30:]) / max(1, len(bars[-30:])), 1)
+    return out
+
+
+def digests_for(bars_by_symbol: dict[str, Sequence[Bar]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for symbol, bars in bars_by_symbol.items():
+        digest = tick_digest(bars)
+        if digest:
+            out[symbol] = digest
+    return out
+
+
+# ---------------------------------------------------------------------------
+# دفتر پیش‌بینی: ایجنت چه گفت، بعداً چه شد
+# ---------------------------------------------------------------------------
+@dataclass
+class Forecast:
+    symbol: str
+    ts: int
+    horizon_s: int
+    direction: str            # up | down | flat
+    confidence: float
+    price: float
+    strength: float = 0.0
+    phase: str = ""
+    scored: bool = False
+    hit: bool | None = None
+    move_bp: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "ts": self.ts,
+            "horizon_s": self.horizon_s,
+            "direction": self.direction,
+            "confidence": self.confidence,
+            "price": self.price,
+            "strength": self.strength,
+            "phase": self.phase,
+            "scored": self.scored,
+            "hit": self.hit,
+            "move_bp": self.move_bp,
+        }
 
 
 @dataclass
-class NowcastResult:
-    symbol: str = ""
-    prob_up: float = 0.5          # احتمال اینکه بازده افق مثبت باشد
-    expected_bps: float = 0.0     # اندازهٔ حرکت پیش‌بینی‌شده
-    hit_rate: float = 0.0         # دقت روی نمونهٔ آزمون
-    brier: float = 0.0
-    samples_train: int = 0
-    samples_test: int = 0
-    horizon_s: int = 60
-    features: dict[str, float] = field(default_factory=dict)
+class ForecastLedger:
+    """ذخیره و نمره‌دهی پیش‌بینی‌های ایجنت (فایل JSON)."""
 
-    @property
-    def edge(self) -> float:
-        """فاصله از بی‌طرفی (۰ = هیچ نظری ندارد)."""
-        return abs(self.prob_up - 0.5) * 2.0
+    path: Any = None
+    rows: list[Forecast] = field(default_factory=list)
 
-    def as_dict(self) -> dict:
+    def load(self) -> "ForecastLedger":
+        try:
+            data = json.loads(open(self.path, encoding="utf-8").read())
+        except (OSError, ValueError, TypeError):
+            return self
+        for item in data.get("forecasts", []) if isinstance(data, dict) else []:
+            try:
+                self.rows.append(Forecast(**{k: item[k] for k in Forecast.__dataclass_fields__ if k in item}))
+            except TypeError:
+                continue
+        return self
+
+    def save(self) -> None:
+        if not self.path:
+            return
+        payload = {"forecasts": [r.as_dict() for r in self.rows[-500:]]}
+        try:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, ensure_ascii=False)
+        except OSError as exc:
+            LOG.warning("ذخیرهٔ دفتر پیش‌بینی نشد: %s", exc)
+
+    # -- ثبت ------------------------------------------------------------
+    def record(self, symbol: str, verdict: dict[str, Any], price: float, now_ts: int) -> Forecast | None:
+        """قضاوت مدل را ثبت کن. ``verdict`` همان بخش momentum ایجنت است."""
+        if not isinstance(verdict, dict) or not verdict:
+            return None
+        direction = str(verdict.get("direction") or "").lower()
+        if direction not in ("up", "down", "flat"):
+            return None
+        try:
+            confidence = float(verdict.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        try:
+            horizon = int(verdict.get("horizon_s", 60))
+        except (TypeError, ValueError):
+            horizon = 60
+        try:
+            strength = float(verdict.get("strength", 0.0))
+        except (TypeError, ValueError):
+            strength = 0.0
+        f = Forecast(
+            symbol=symbol,
+            ts=int(now_ts),
+            horizon_s=max(5, min(3600, horizon)),
+            direction=direction,
+            confidence=max(0.0, min(1.0, confidence)),
+            price=float(price),
+            strength=max(0.0, min(1.0, strength)),
+            phase=str(verdict.get("phase") or ""),
+        )
+        self.rows.append(f)
+        return f
+
+    # -- نمره‌دهی --------------------------------------------------------
+    def score(self, prices: dict[str, float], now_ts: int, tolerance_bp: float = 1.0) -> dict[str, Any]:
+        for row in self.rows:
+            if row.scored or now_ts - row.ts < row.horizon_s:
+                continue
+            price = prices.get(row.symbol)
+            if not price or row.price <= 0:
+                continue
+            move = _ret_bp(price, row.price)
+            row.move_bp = round(move, 2)
+            row.scored = True
+            if row.direction == "flat":
+                row.hit = abs(move) <= tolerance_bp
+            elif row.direction == "up":
+                row.hit = move > tolerance_bp
+            else:
+                row.hit = move < -tolerance_bp
+        return self.stats()
+
+    def stats(self) -> dict[str, Any]:
+        scored = [r for r in self.rows if r.scored]
+        if not scored:
+            return {"n": 0, "hit_rate": 0.0, "avg_move_bp": 0.0, "pending": len(self.rows)}
+        hits = sum(1 for r in scored if r.hit)
+        # دقت وزنی: پیش‌بینی‌های با اطمینان بالا مهم‌ترند
+        conf = sum(r.confidence for r in scored) or 1.0
+        weighted = sum(r.confidence for r in scored if r.hit) / conf
         return {
-            "symbol": self.symbol,
-            "prob_up": round(self.prob_up, 4),
-            "expected_bps": round(self.expected_bps, 2),
-            "hit_rate": round(self.hit_rate, 4),
-            "brier": round(self.brier, 4),
-            "samples": {"train": self.samples_train, "test": self.samples_test},
-            "horizon_s": self.horizon_s,
-            "edge": round(self.edge, 3),
-            "features": {k: round(v, 6) for k, v in self.features.items()},
+            "n": len(scored),
+            "hit_rate": round(hits / len(scored), 3),
+            "weighted_hit_rate": round(weighted, 3),
+            "avg_move_bp": round(sum(r.move_bp for r in scored) / len(scored), 2),
+            "pending": len(self.rows) - len(scored),
         }
 
-    def summary(self) -> str:
-        return (
-            f"{self.symbol}: p(up)={self.prob_up:.2f} · انتظار {self.expected_bps:+.1f}bp · "
-            f"دقت {self.hit_rate:.0%} روی {self.samples_test} نمونه"
-        )
-
-
-class MomentumNowcaster:
-    """پرسپترون با نرخ یادگیری ثابت؛ کاملاً پایتون خالص و قطعی."""
-
-    def __init__(self, horizon_s: int = 60, window_s: int = 1200, lr: float = 0.08) -> None:
-        self.horizon_s = max(1, int(horizon_s))
-        self.window_s = max(self.horizon_s * 4, int(window_s))
-        self.lr = float(lr)
-        self.weights = [0.0, 0.0, 0.0, 0.0]
-        self.bias = 0.0
-
-    # -- ویژگی‌ها -------------------------------------------------------
-    def _features(self, bars: Sequence[Bar], i: int, r_fast_prev: float) -> list[float]:
-        close = bars[i].close
-        def back(n: int) -> float:
-            j = max(0, i - n)
-            return bars[j].close or close
-        r_fast = _log(close / back(5)) if back(5) > 0 else 0.0
-        r_slow = _log(close / back(30)) if back(30) > 0 else 0.0
-        window = bars[max(0, i - 30) : i + 1]
-        ups = sum(1 for k in range(1, len(window)) if window[k].close >= window[k - 1].close)
-        downs = (len(window) - 1) - ups
-        imb = (ups - downs) / max(1, len(window) - 1)
-        accel = r_fast - r_fast_prev
-        return [r_fast * 1e4, accel * 1e4, r_slow * 1e4, imb]
-
-    def _sigmoid(self, z: float) -> float:
-        if z >= 0:
-            return 1.0 / (1.0 + math.exp(-min(z, 30.0)))
-        ez = math.exp(max(z, -30.0))
-        return ez / (1.0 + ez)
-
-    def predict(self, features: list[float]) -> float:
-        z = self.bias + sum(w * f for w, f in zip(self.weights, features))
-        return self._sigmoid(z / 10.0)  # مقیاس‌دهی تا ویژگی‌های bp مدل را اشباع نکنند
-
-    # -- آموزش + ارزیابی ------------------------------------------------
-    def run(self, symbol: str, bars: Sequence[Bar]) -> NowcastResult:
-        result = NowcastResult(symbol=symbol, horizon_s=self.horizon_s)
-        if not bars or len(bars) < 200:
-            return result
-
-        bars = list(bars)[-self.window_s :]
-        samples: list[tuple[list[float], int, float]] = []
-        r_fast_prev = 0.0
-        for i in range(31, len(bars) - self.horizon_s):
-            feats = self._features(bars, i, r_fast_prev)
-            r_fast_prev = feats[0] / 1e4
-            future = bars[min(len(bars) - 1, i + self.horizon_s)].close
-            now = bars[i].close
-            if now <= 0 or future <= 0:
-                continue
-            ret = _log(future / now)
-            samples.append((feats, 1 if ret > 0 else 0, ret))
-        if len(samples) < 60:
-            return result
-
-        split = int(len(samples) * 0.7)
-        train, test = samples[:split], samples[split:]
-
-        # مقیاس‌دهی ویژگی‌ها (میانگین/انحراف روی نمونهٔ آموزش) تا bpهای بزرگ غالب نشوند
-        dim = 4
-        mean = [sum(s[0][k] for s in train) / len(train) for k in range(dim)]
-        std = []
-        for k in range(dim):
-            var = sum((s[0][k] - mean[k]) ** 2 for s in train) / len(train)
-            std.append(math.sqrt(var) or 1.0)
-
-        def scaled(feats: list[float]) -> list[float]:
-            return [(feats[k] - mean[k]) / std[k] for k in range(dim)]
-
-        self.weights = [0.0] * dim
-        self.bias = 0.0
-        for feats, label, _ret in train:
-            xs = scaled(feats)
-            p = self.predict(xs)
-            err = label - p
-            self.weights = [w + self.lr * err * x for w, x in zip(self.weights, xs)]
-            self.bias += self.lr * err
-
-        correct = 0
-        brier_sum = 0.0
-        for feats, label, _ret in test:
-            p = self.predict(scaled(feats))
-            correct += 1 if (p >= 0.5) == (label == 1) else 0
-            brier_sum += (p - label) ** 2
-
-        result.samples_train = len(train)
-        result.samples_test = len(test)
-        result.hit_rate = correct / max(1, len(test))
-        result.brier = brier_sum / max(1, len(test))
-
-        last_feats = self._features(bars, len(bars) - 1, r_fast_prev)
-        xs = scaled(last_feats)
-        result.prob_up = self.predict(xs)
-        result.features = dict(zip(("r_fast_bp", "accel_bp", "r_slow_bp", "imbalance"), last_feats))
-
-        # اندازهٔ حرکت: میانگین |بازده| افق × جهت پیش‌بینی‌شده
-        mean_abs = sum(abs(s[2]) for s in samples) / len(samples)
-        result.expected_bps = mean_abs * 1e4 * (1 if result.prob_up >= 0.5 else -1) * result.edge
-        return result
-
-
-def nowcast_symbols(
-    bars_by_symbol: dict[str, Sequence[Bar]],
-    horizon_s: int = 60,
-    window_s: int = 1200,
-) -> dict[str, dict]:
-    """برای چند نماد هم‌زمان؛ خروجی آمادهٔ گذاشتن در context و گزارش."""
-    out: dict[str, dict] = {}
-    for symbol, bars in bars_by_symbol.items():
-        if not bars:
-            continue
-        res = MomentumNowcaster(horizon_s=horizon_s, window_s=window_s).run(symbol, bars)
-        out[symbol] = res.as_dict()
-    return out
+    def recent(self, limit: int = 5) -> list[dict[str, Any]]:
+        return [r.as_dict() for r in self.rows[-limit:]]

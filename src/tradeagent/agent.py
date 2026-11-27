@@ -91,6 +91,7 @@ class ToolCallRecord:
 @dataclass
 class AgentTrace:
     proposal: dict[str, Any] | None = None
+    momentum: dict[str, Any] | None = None
     analysis: str = ""
     calls: list[ToolCallRecord] = field(default_factory=list)
     rounds: int = 0
@@ -101,6 +102,7 @@ class AgentTrace:
             "rounds": self.rounds,
             "analysis": self.analysis,
             "proposal": self.proposal,
+            "momentum": self.momentum,
             "error": self.error,
             "calls": [c.as_dict() for c in self.calls],
         }
@@ -239,6 +241,9 @@ class ToolAgent:
             analysis = str(data.get("analysis") or "").strip()
             if analysis:
                 trace.analysis = analysis[:600]
+            momentum = data.get("momentum")
+            if isinstance(momentum, dict) and momentum:
+                trace.momentum = momentum
 
             calls = data.get("tool_calls") or []
             if not isinstance(calls, list):

@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# اجرای ایجنت روی طلا به‌صورت سرویس (تک‌نمادی، MCP، مدل محلی)
+#
+#   ./scripts/run_gold.sh            # سرویس طلا را نصب/فعال کن (جای سرویس عمومی)
+#   ./scripts/run_gold.sh --status   # چه چیزی الان در حال اجراست
+#   ./scripts/run_gold.sh --revert   # برگرد به سرویس عمومی (configs/local.toml)
+# ---------------------------------------------------------------------------
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+INTERVAL="${INTERVAL:-300}"
+MODE="enable"
+case "${1:-}" in
+  --status) MODE="status" ;;
+  --revert) MODE="revert" ;;
+  -h|--help) sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+ok()   { printf '\033[1;32m[gold]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[gold]\033[0m %s\n' "$*"; }
+bad()  { printf '\033[1;31m[gold]\033[0m %s\n' "$*"; }
+dim()  { printf '\033[2m[gold] %s\033[0m\n' "$*"; }
+step() { printf '\n\033[1;35m=== %s\033[0m\n' "$*"; }
+
+DIR="$HOME/.config/systemd/user"
+GEN="$DIR/tradeagent-loop.service"
+GOLD="$DIR/tradeagent-gold.service"
+
+status() {
+  step "۱) سرویس‌ها"
+  for unit in tradeagent-loop tradeagent-gold; do
+    if systemctl --user list-unit-files 2>/dev/null | grep -q "^$unit\.service"; then
+      printf '  %-22s %s\n' "$unit" "$(systemctl --user is-active "$unit".service 2>/dev/null)/$(systemctl --user is-enabled "$unit".service 2>/dev/null)"
+    else
+      printf '  %-22s not installed\n' "$unit"
+    fi
+  done
+  step "۲) قفل چرخه"
+  if [[ -f var/loop.lock ]]; then
+    dim "var/loop.lock → $(cat var/loop.lock)"
+    PID="$(awk '{print $1}' var/loop.lock)"
+    if kill -0 "$PID" 2>/dev/null; then ok "صاحب قفل (pid $PID) زنده است"
+    else warn "صاحب قفل مرده است (pid $PID) - اجرای بعدی خودش پاک می‌کند"; fi
+  else
+    ok "قفلی نیست (چیزی در حال اجرا نیست)"
+  fi
+  step "۳) آخرین چرخه"
+  if [[ -f var/reports/latest.md ]]; then
+    head -3 var/reports/latest.md | sed 's/^/  /'
+  else
+    dim "گزارشی نیست"
+  fi
+}
+
+ensure_env() {
+  [[ -f .env ]] || touch .env
+  grep -q '^TRADEAGENT_LLM_PROVIDER=' .env || echo 'TRADEAGENT_LLM_PROVIDER=ollama' >> .env
+  grep -q '^TRADEAGENT_OLLAMA_MODEL=' .env || echo 'TRADEAGENT_OLLAMA_MODEL=qwen2.5:7b-instruct' >> .env
+  grep -q '^TRADEAGENT_OLLAMA_URL=' .env || echo 'TRADEAGENT_OLLAMA_URL=http://127.0.0.1:11434' >> .env
+  dim "provider=ollama (روی GPU محلی)"
+}
+
+if [[ "$MODE" == "status" ]]; then
+  status
+  exit 0
+fi
+
+if [[ "$MODE" == "revert" ]]; then
+  step "برگشت به سرویس عمومی"
+  systemctl --user disable --now tradeagent-gold.service 2>/dev/null || true
+  rm -f "$GOLD"
+  systemctl --user daemon-reload 2>/dev/null || true
+  if systemctl --user enable --now tradeagent-loop.service 2>/dev/null; then
+    ok "tradeagent-loop.service دوباره فعال شد"
+  else
+    warn "سرویس عمومی نصب نیست؛ با ./scripts/install_systemd_user.sh بسازش"
+  fi
+  exit 0
+fi
+
+step "۱) آماده‌سازی"
+ensure_env
+[[ -f configs/gold.toml ]] || { bad "configs/gold.toml نیست"; exit 1; }
+ok "پروفایل: configs/gold.toml (XAUUSD_i، MCP، هر چرخه مدل)"
+
+command -v systemctl >/dev/null 2>&1 || { bad "systemctl نیست"; exit 1; }
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+  bad "این شل به systemd کاربری وصل نیست؛ در ترمینال دسکتاپ اجرا کن"
+  exit 1
+fi
+
+step "۲) قطع سرویس عمومی (تا دو نمونه هم‌زمان نباشند)"
+if systemctl --user is-active tradeagent-loop.service >/dev/null 2>&1; then
+  systemctl --user disable --now tradeagent-loop.service 2>/dev/null && ok "tradeagent-loop.service خوابید"
+else
+  dim "سرویس عمومی فعال نبود"
+fi
+PID="$(awk '{print $1}' var/loop.lock 2>/dev/null || true)"
+if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then
+  warn "یک نمونهٔ دستی (pid $PID) هنوز در حال اجراست - همان را می‌بندم"
+  kill "$PID" 2>/dev/null || true
+  sleep 2
+fi
+rm -f var/loop.lock
+
+step "۳) نصب سرویس طلا"
+mkdir -p "$DIR"
+cat > "$GOLD" <<UNIT
+[Unit]
+Description=tradeAgent gold agent (XAUUSD, MCP tools)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+ExecStart=$ROOT/.venv/bin/tradeagent --config $ROOT/configs/gold.toml loop --interval $INTERVAL
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+UNIT
+systemctl --user daemon-reload 2>/dev/null
+systemctl --user enable --now tradeagent-gold.service 2>/dev/null || { bad "فعال نشد"; exit 1; }
+ok "tradeagent-gold.service فعال شد (هر ${INTERVAL}s)"
+
+step "۴) وضعیت پس از ۲۰ ثانیه"
+sleep 20
+systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 \
+  && ok "سرویس در حال اجراست" || bad "سرویس بالا نیامد"
+journalctl --user -u tradeagent-gold.service -n 12 --no-pager 2>/dev/null | sed 's/^/  /'
+
+step "گام بعدی"
+cat <<'EOF'
+  * لاگ زنده:    journalctl --user -u tradeagent-gold.service -f
+  * گزارش‌ها:    git -C ~/Documents/GitHub/tradeAgent log origin/reports --oneline | head -3
+  * وضعیت:       ./scripts/run_gold.sh --status
+  * برگشت:       ./scripts/run_gold.sh --revert
+  * اتصال MT5:   ./scripts/connect_trade_mcp.sh        (کشیدن اکسپرت روی چارت طلا)
+EOF

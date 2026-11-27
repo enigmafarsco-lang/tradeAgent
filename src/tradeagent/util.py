@@ -92,30 +92,73 @@ def round_sig(value: float, digits: int = 4) -> float:
 
 
 class LockFile:
-    """قفل ساده بر اساس فایل، تا دو چرخه هم‌زمان روی هم نیفتند."""
+    """قفل فایل، با شناسهٔ پروسه تا قفل مرده با قفل زنده اشتباه نشود."""
 
     def __init__(self, path: Path, stale_after_s: float = 1800.0) -> None:
         self.path = path
         self.stale_after_s = stale_after_s
+        self.pid = os.getpid()
 
+    # -- کمکی -----------------------------------------------------------
+    def _owner(self) -> tuple[int, float]:
+        try:
+            text = self.path.read_text(encoding="utf-8").strip()
+            age = time.time() - self.path.stat().st_mtime
+        except OSError:
+            return 0, 0.0
+        try:
+            return int(text.split()[0]), age
+        except (ValueError, IndexError):
+            return 0, age
+
+    @staticmethod
+    def _alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    # -- API ------------------------------------------------------------
     def acquire(self) -> bool:
         ensure_dir(self.path.parent)
         if self.path.exists():
-            age = time.time() - self.path.stat().st_mtime
-            if age < self.stale_after_s:
+            pid, age = self._owner()
+            if pid and self._alive(pid):
+                LOG.info("قفل در دست پروسهٔ زندهٔ %s است", pid)
                 return False
-            LOG.warning("قفل کهنه (%.0f ثانیه) پاک شد: %s", age, self.path)
+            if age < self.stale_after_s and not pid:
+                # بدون pid ولی تازه: محتاط باش
+                return False
+            try:
+                self.path.unlink()
+                LOG.warning("قفل مرده پاک شد (pid=%s، سن %.0f ثانیه)", pid or "?", age)
+            except OSError:
+                pass
         try:
             fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             return False
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(f"{os.getpid()} {utc_iso()}\n")
+            fh.write(f"{self.pid} {utc_iso()}\n")
         return True
+
+    def refresh(self) -> None:
+        """مهر زمانی قفل را تازه کن تا نمونهٔ زنده «کهنه» شمرده نشود."""
+        try:
+            os.utime(self.path, None)
+        except OSError:
+            pass
 
     def release(self) -> None:
         try:
-            self.path.unlink()
+            pid, _age = self._owner()
+            if pid in (0, self.pid):
+                self.path.unlink()
         except OSError:
             pass
 

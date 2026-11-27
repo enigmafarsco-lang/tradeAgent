@@ -17,7 +17,7 @@ from .features import compute_features
 from .agent import ToolAgent
 from .llm import LLMAdvisor, LLMResult
 from .mcp_client import mcp_from_config
-from .nowcast import nowcast_symbols
+from .nowcast import ForecastLedger, digests_for
 from .paper import CycleResult, PaperEngine, Store
 from .policy import (AdaptiveController, Decision, baseline_params, describe, new_policy,
                      sanitize_for_log, validate_proposal)
@@ -96,6 +96,7 @@ class Runner:
         )
         self.advisor = LLMAdvisor(cfg, self.state_dir / "llm_calls.json")
         # ایجنت ابزاردار: اگر MCP پیکربندی شده باشد، مدل خودش داده می‌گیرد
+        self.ledger = ForecastLedger(path=self.state_dir / "forecasts.json").load()
         self.mcp = mcp_from_config(cfg)
         self.agent: ToolAgent | None = None
         if self.mcp.enabled and self.mcp.start():
@@ -196,7 +197,9 @@ class Runner:
                 for t in result.extra.get("recent_trades", [])[:8]
             ],
             "market": market,
-            "nowcast": result.extra.get("nowcast", {}),
+            "tick_digest": result.extra.get("digest", {}),
+            "your_forecast_score": result.extra.get("forecast_stats", {}),
+            "your_recent_forecasts": result.extra.get("forecasts_recent", []),
             "open_positions": len(result.open_positions),
             "data_warnings": result.warnings[:6],
             "instruction": "Only JSON. variant + params within 20%. Never change risk/limits.",
@@ -227,18 +230,24 @@ class Runner:
 
         result = self.engine.process(ingest.bars, policy_in, cycle, now_ts)
 
-        # پیش‌بینی روند از حرکت ثانیه‌ای (برای مدل و گزارش)
-        if bool(self.cfg.get("nowcast.enabled", True)):
-            horizon = int(self.cfg.get("nowcast.horizon_s", 60))
-            window = int(self.cfg.get("nowcast.window_s", 1200))
-            history = {
-                sym: self.store.recent_bars(sym, window)
-                for sym in (ingest.bars.keys() or self.cfg.symbols)
+        # خوراک ایجنت: خلاصهٔ عددی حرکت ثانیه‌ای (تصمیم با مدل است)
+        window = int(self.cfg.get("nowcast.window_s", 1200))
+        history = {
+            sym: self.store.recent_bars(sym, window)
+            for sym in (ingest.bars.keys() or self.cfg.symbols)
+        }
+        try:
+            result.extra["digest"] = digests_for(history)
+            prices = {
+                sym: (bars[-1].close if bars else 0.0) for sym, bars in history.items()
             }
-            try:
-                result.extra["nowcast"] = nowcast_symbols(history, horizon_s=horizon, window_s=window)
-            except Exception as exc:  # noqa: BLE001 - پیش‌بینی نباید چرخه را بکشد
-                result.warnings.append(f"nowcast محاسبه نشد: {type(exc).__name__}: {exc}")
+            ledger = self.ledger
+            ledger.score(prices, now_ts)
+            result.extra["forecast_stats"] = ledger.stats()
+            result.extra["forecasts_recent"] = ledger.recent(5)
+            ledger.save()
+        except Exception as exc:  # noqa: BLE001
+            result.warnings.append(f"digest/دفتر پیش‌بینی: {type(exc).__name__}: {exc}")
         result.source = ingest.source
         result.ingest = [info.as_dict() for info in ingest.per_symbol.values()]
         result.previous_policy = prev_policy
@@ -278,6 +287,20 @@ class Runner:
             if self.agent is not None:
                 trace = self.agent.run(context, skill_text=self.skill_text())
                 result.extra["agent"] = trace.as_dict()
+                if trace.momentum:
+                    result.extra["momentum"] = trace.momentum
+                    symbol = (self.cfg.symbols or ["XAUUSD"])[0]
+                    price = 0.0
+                    bars = history.get(symbol) or []
+                    if bars:
+                        price = bars[-1].close
+                    rec = self.ledger.record(symbol, trace.momentum, price, now_ts)
+                    if rec is not None:
+                        self.ledger.save()
+                        LOG.info(
+                            "پیش‌بینی ایجنت: %s %s (اطمینان %.2f، افق %ss)",
+                            symbol, rec.direction, rec.confidence, rec.horizon_s,
+                        )
                 if trace.error:
                     result.warnings.append(f"ایجنت: {trace.error}")
                 llm = LLMResult(trace.proposal, {"provider": "agent", **trace.as_dict()})
@@ -406,7 +429,12 @@ class Runner:
         interval = int(interval or self.cfg.get("loop.interval_s", 300))
         lock = LockFile(self.state_dir / "loop.lock", stale_after_s=max(600, interval * 3))
         if not lock.acquire():
-            LOG.error("یک نمونه‌ی دیگر در حال اجراست (%s)", self.state_dir / "loop.lock")
+            pid, _age = lock._owner()
+            LOG.error(
+                "یک نمونه‌ی دیگر در حال اجراست (pid=%s، %s). "
+                "اگر مطمئنی مرده است: rm -f %s  — یا با 'systemctl --user stop tradeagent-loop.service' سرویس را بخوابان.",
+                pid or "?", self.state_dir / "loop.lock", self.state_dir / "loop.lock",
+            )
             return 2
 
         def _stop(signum: int, _frame: Any) -> None:
