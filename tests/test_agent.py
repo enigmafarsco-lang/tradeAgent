@@ -190,3 +190,13 @@ def test_run_gold_never_fights_its_own_service(tmp_path) -> None:
     assert 'if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then' in body
     # آمادگی با فایل وضعیت پل سنجیده می‌شود، نه فقط is-active
     assert "var/state/mcp_status.json" in body
+
+
+def test_run_gold_finds_status_file_where_the_loop_writes_it() -> None:
+    """حلقه در state_dir می‌نویسد (پیش‌فرض var)؛ اسکریپت نباید فقط var/state را ببیند."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert "status_file()" in body
+    assert "var/mcp_status.json var/state/mcp_status.json" in body
+    assert "ea_connected" in body

@@ -493,9 +493,17 @@ class Runner:
         result.extra["publish"] = publish_info
         stored = render_compact(result)
         self.store.add_cycle(cycle, stored)
+        mom = (result.extra.get("momentum") or {}) if isinstance(result.extra, dict) else {}
+        mom_txt = (
+            f"{mom.get('direction', '?')}/{mom.get('phase', '?')} "
+            f"قدرت={float(mom.get('strength', 0) or 0):.2f} "
+            f"اطمینان={float(mom.get('confidence', 0) or 0):.2f} "
+            f"افق={mom.get('horizon_s', '?')}s"
+            if mom else "بدون حکم (مدل برنگرداند)"
+        )
         LOG.info(
-            "چرخه #%s تمام شد | equity=%.2f | بسته‌شده=%s | سیاست بعد: %s",
-            cycle, result.equity, len(result.closed_trades), describe(next_policy),
+            "چرخه #%s تمام شد | equity=%.2f | بسته‌شده=%s | تکانه: %s | سیاست بعد: %s",
+            cycle, result.equity, len(result.closed_trades), mom_txt, describe(next_policy),
         )
         return {
             "ok": True,

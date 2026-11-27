@@ -23,6 +23,41 @@ bad()  { printf '\033[1;31m[gold]\033[0m %s\n' "$*"; }
 dim()  { printf '\033[2m[gold] %s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;35m=== %s\033[0m\n' "$*"; }
 
+# حلقه وضعیت پل را در state_dir می‌نویسد؛ state_dir پیش‌فرض «var» است، پس هر دو مسیر را ببین
+status_file() {
+  local best=0 f m newest=""
+  for f in var/mcp_status.json var/state/mcp_status.json; do
+    [[ -f "$f" ]] || continue
+    m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    if (( m > best )); then best="$m"; newest="$f"; fi
+  done
+  printf '%s' "$newest"
+}
+
+show_bridge() {
+  local f; f="$(status_file)"
+  if [[ -z "$f" ]]; then
+    dim "وضعیت پل MCP هنوز منتشر نشده ($f)"
+    return 0
+  fi
+  STATUS_FILE="$f" python3 - <<'PY' 2>/dev/null || dim "خواندن وضعیت پل نشد"
+import json, os, pathlib
+d = json.loads(pathlib.Path(os.environ["STATUS_FILE"]).read_text(encoding="utf-8"))
+b = d.get("bridge") or {}
+a = d.get("account") or {}
+t = d.get("terminal") or {}
+print(f"  bridge={b.get('listen')} ea_connected={b.get('ea_connected')} "
+      f"peer={b.get('ea_peer')} since={b.get('connected_for_seconds')}s")
+if a:
+    print(f"  account={a.get('login')} server={a.get('server')} "
+          f"balance={a.get('balance')} equity={a.get('equity')}")
+if t.get("company"):
+    print(f"  terminal={t.get('company')} build={t.get('build')}")
+if not b.get("ea_connected"):
+    print("  اکسپرت وصل نیست: TradeMCPConnector را روی چارت XAUUSD_i بگذار و Algo Trading را روشن کن")
+PY
+}
+
 DIR="$HOME/.config/systemd/user"
 GEN="$DIR/tradeagent-loop.service"
 GOLD="$DIR/tradeagent-gold.service"
@@ -45,9 +80,12 @@ status() {
   else
     ok "قفلی نیست (چیزی در حال اجرا نیست)"
   fi
-  step "۳) آخرین چرخه"
+  step "۳) پل MCP"
+  show_bridge
+  step "۴) آخرین چرخه"
   if [[ -f var/reports/latest.md ]]; then
-    head -3 var/reports/latest.md | sed 's/^/  /'
+    grep -m 6 -E "momentum|جهت|فاز|شتاب|confidence|اطمینان" var/reports/latest.md \
+      | sed 's/^/  /' || head -3 var/reports/latest.md | sed 's/^/  /'
   else
     dim "گزارشی نیست"
   fi
@@ -160,8 +198,9 @@ READY=0
 for _ in $(seq 1 12); do
   sleep 5
   systemctl --user is-active tradeagent-gold.service >/dev/null 2>&1 || { READY=-1; break; }
-  if [[ -f var/state/mcp_status.json ]]; then
-    MTIME="$(stat -c %Y var/state/mcp_status.json 2>/dev/null || echo 0)"
+  F="$(status_file)"
+  if [[ -n "$F" ]]; then
+    MTIME="$(stat -c %Y "$F" 2>/dev/null || echo 0)"
     (( MTIME >= START_STAMP - 5 )) && { READY=1; break; }
   fi
 done
@@ -169,18 +208,7 @@ done
 case "$READY" in
   1)
     ok "سرویس در حال اجراست و وضعیت پل MCP را منتشر کرد"
-    python3 - <<'PY' 2>/dev/null || true
-import json, pathlib
-d = json.loads(pathlib.Path("var/state/mcp_status.json").read_text(encoding="utf-8"))
-b = d.get("bridge") or {}
-t = d.get("terminal") or {}
-a = d.get("account") or {}
-print(f"  bridge={b.get('listen')} ea_connected={b.get('ea_connected')}")
-if a:
-    print(f"  account={a.get('login')} server={a.get('server')} balance={a.get('balance')}")
-if not b.get("ea_connected"):
-    print("  اکسپرت وصل نیست: در متاتریدر TradeMCPConnector را روی چارت XAUUSD_i بگذار")
-PY
+    show_bridge
     ;;
   0)
     warn "سرویس فعال است ولی وضعیت پل MCP هنوز منتشر نشد (شاید چرخهٔ اول مشغول مدل است)"
