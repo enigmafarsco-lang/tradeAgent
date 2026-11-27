@@ -785,6 +785,27 @@ PY
   else
     dim "OLLAMA_VULKAN=1 is already in the unit"
   fi
+  # سرویس نباید قبل از آماده‌شدن دستگاه گرافیکی بالا بیاید؛ وگرنه یک‌بار برای همیشه
+  # روی CPU می‌ماند تا کسی دستی ری‌استارت کند (همین اتفاق بعد از ریبوت افتاد).
+  if ! grep -q 'ExecStartPre=.*/dev/dri' "$unit"; then
+    python3 - "$unit" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text().splitlines()
+wait = ("ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/dri/renderD128 ] "
+        "&& [ $i -lt 90 ]; do i=$((i+1)); sleep 1; done'")
+out, done = [], False
+for ln in lines:
+    out.append(ln)
+    if ln.strip() == "[Service]" and not done:
+        out.append(wait)
+        done = True
+p.write_text("\n".join(out) + "\n")
+PY
+    ok "added a startup wait for /dev/dri (survives reboots without a manual restart)"
+  else
+    dim "startup wait for /dev/dri is already there"
+  fi
   systemctl --user daemon-reload 2>/dev/null
   if ! systemctl --user restart ollama.service 2>/dev/null; then
     bad "could not restart the user unit"; return 1

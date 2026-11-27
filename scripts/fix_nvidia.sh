@@ -238,7 +238,13 @@ deep_diag() {
     dpkg -l 2>/dev/null | awk '/nvidia-(driver|dkms|kernel|firmware|utils)/{print $2, $3}'
   } > "$out" 2>&1
 
-  drv="$(awk -F': ' '/Kernel driver in use/{print $2; exit}' "$out")"
+  # فقط تابع گرافیکی کارت NVIDIA (0300/0301/0302)؛ HDMI audio همان کارت درایورش
+  # snd_hda_intel است و بی‌دقت باعث حکم غلط می‌شد.
+  drv="$(awk 'BEGIN{RS="";FS="\n"}
+    /NVIDIA/ && (/\[0300\]/ || /\[0301\]/ || /\[0302\]/ || /VGA compatible controller/ || /3D controller/) {
+      for (i=1;i<=NF;i++) if ($i ~ /Kernel driver in use/) { sub(/.*: /,"",$i); print $i; exit }
+      print "none"; exit
+    }' "$out")"
   echo "  kernel driver in use on the GPU: ${drv:-<none>}"
   echo "  log: $out"
   echo

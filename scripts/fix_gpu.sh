@@ -60,10 +60,15 @@ load_model() {
   sleep 2
 }
 
+backend_name() {
+  if [[ -r /proc/driver/nvidia/version ]]; then printf 'NVIDIA (CUDA)'
+  else printf 'Vulkan (Intel/AMD)'; fi
+}
+
 proof() {
   local v; v="$(vram_now)"
   if [[ "${v:-0}" -gt 0 ]]; then
-    ok "روی GPU است: $(awk -v x="$v" 'BEGIN{printf "%.1f", x/1e9}') GB در VRAM"
+    ok "روی GPU است: $(awk -v x="$v" 'BEGIN{printf "%.1f", x/1e9}') GB در VRAM — بک‌اند: $(backend_name)"
     return 0
   fi
   return 1
@@ -117,7 +122,11 @@ phase_nvidia() {
     return 0
   fi
   local drv
-  drv="$(lspci -nnk 2>/dev/null | awk '/NVIDIA/{f=1} f&&/Kernel driver in use/{print $NF; exit}')"
+  drv="$(lspci -nnk 2>/dev/null | awk 'BEGIN{RS="";FS="\n"}
+    /NVIDIA/ && (/\[0300\]/ || /\[0301\]/ || /\[0302\]/ || /VGA compatible controller/ || /3D controller/) {
+      for (i=1;i<=NF;i++) if ($i ~ /Kernel driver in use/) { sub(/.*: /,"",$i); print $i; exit }
+      print "none"; exit
+    }')"
   echo "  driver on the card: ${drv:-<none>}"
   case "$drv" in
     vfio*)
@@ -175,7 +184,7 @@ if (( HAVE_NVIDIA )); then
   step "۳) اثبات با NVIDIA"
   restart_ollama && load_model
   if proof; then
-    ok "تمام. کارت NVIDIA کار می‌کند."
+    ok "تمام. روی GPU است ($(backend_name))."
     exit 0
   fi
   warn "ماژول بار است ولی ollama روی GPU نرفت - تشخیص:"
