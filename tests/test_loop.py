@@ -267,3 +267,18 @@ def test_last_attempt_decides_not_the_older_errors(tmp_path, monkeypatch) -> Non
     info = ea_log()
     assert info["connected"] is True
     assert info["not_allowed"] is False
+
+
+def test_diag_reports_harvester_freshness(tmp_path, monkeypatch) -> None:
+    """bars=0 باید علتش دیده شود: تیک تازه می‌رسد یا نه."""
+    from tradeagent.diag import harvester
+
+    monkeypatch.setenv("MT5_WINEPREFIX", str(tmp_path))
+    ticks = tmp_path / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Files" / "harvester" / "ticks"
+    ticks.mkdir(parents=True)
+    (ticks / "XAUUSD_i-20261127.csv").write_text("t,bid,ask\n", encoding="utf-8")
+
+    info = harvester()
+    assert info["found"] is True
+    assert info["newest"].startswith("XAUUSD_i")
+    assert isinstance(info["age_s"], int)

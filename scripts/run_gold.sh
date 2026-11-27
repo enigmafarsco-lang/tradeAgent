@@ -177,7 +177,41 @@ if [[ "$MODE" == "verify" ]]; then
   done
   rm -f var/loop.lock
 
-  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm 2>&1 | tail -40
+  "$PY" -m tradeagent --config configs/gold.toml loop --once --llm > /tmp/tradeagent-verify.json 2>&1
+  "$PY" - <<'PY'
+import json, pathlib
+
+raw = pathlib.Path("/tmp/tradeagent-verify.json").read_text(encoding="utf-8", errors="replace")
+start = raw.find("{")
+try:
+    data = json.loads(raw[start:]) if start >= 0 else {}
+except ValueError:
+    print(raw[-1500:])
+    data = {}
+
+agent = data.get("agent") or {}
+print(f"  چرخه {data.get('cycle')} | llm={((data.get('compact') or {}).get('llm'))} "
+      f"| equity={data.get('equity')}")
+print(f"  سیاست: {data.get('policy')}")
+if agent:
+    print(f"  ایجنت: rounds={agent.get('rounds')} repairs={agent.get('repairs')} "
+          f"error={agent.get('error') or '-'}")
+    for call in (agent.get("calls") or []):
+        print(f"    {call.get('tool'):<18} ok={call.get('ok')} {call.get('elapsed_ms')}ms "
+              f"{(str(call.get('error'))[:70]) if not call.get('ok') else ''}")
+    if agent.get("analysis"):
+        print(f"  تحلیل: {str(agent.get('analysis'))[:220]}")
+else:
+    print("  ایجنت اجرا نشد (agent خالی)" + (f" · خطا: {data.get('publish')}" if not data else ""))
+mom = data.get("momentum") or {}
+if mom:
+    print(f"  حکم تکانه: {mom.get('direction')}/{mom.get('phase')} "
+          f"قدرت={mom.get('strength')} افق={mom.get('horizon_s')}s اطمینان={mom.get('confidence')}")
+    if mom.get("reason"):
+        print(f"  دلیل: {str(mom.get('reason'))[:200]}")
+else:
+    print("  حکم تکانه: مدل برنگرداند")
+PY
 
   step "حکم مدل در گزارش"
   "$PY" - <<'PY'

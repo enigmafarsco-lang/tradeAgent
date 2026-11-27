@@ -600,6 +600,8 @@ class Runner:
         return {
             "ok": True,
             "cycle": cycle,
+            "agent": result.extra.get("agent"),
+            "momentum": result.extra.get("momentum"),
             "equity": result.equity,
             "trades_closed": len(result.closed_trades),
             "report_md": str(self.reports_dir / "latest.md"),

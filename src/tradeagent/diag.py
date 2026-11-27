@@ -195,6 +195,31 @@ def mt5_pids() -> list[str]:
     return pids
 
 
+def harvester() -> dict[str, Any]:
+    """آیا اکسپرت هاروستر تیک تازه می‌نویسد؟ (bars=0 معمولاً یعنی نه)"""
+    root = prefix()
+    dirs = list(root.glob("**/MQL5/Files/harvester"))
+    if not dirs:
+        return {"found": False}
+    d = max(dirs, key=lambda x: x.stat().st_mtime)
+    files = [f for sub in ("ticks", "bars", "") for f in (d / sub).glob("*") if f.is_file()]
+    if not files:
+        return {"found": True, "dir": str(d), "files": 0, "age_s": None}
+    newest = max(files, key=lambda f: f.stat().st_mtime)
+    return {
+        "found": True,
+        "dir": str(d),
+        "files": len(files),
+        "newest": oldest_name(newest),
+        "age_s": int(time.time() - newest.stat().st_mtime),
+        "size": newest.stat().st_size,
+    }
+
+
+def oldest_name(path: Path) -> str:
+    return path.name
+
+
 def report() -> None:
     """بلوک خوانا برای `run_gold.sh --status`."""
     pids = mt5_pids()
@@ -222,3 +247,11 @@ def report() -> None:
         print("    و اضافه کردن  127.0.0.1  (اگر نپذیرفت: http://127.0.0.1 )")
     for note in journal_notices(2):
         print(f"  اعلان متاتریدر: {note[:140]}")
+    h = harvester()
+    if h.get("found"):
+        age = h.get("age_s")
+        print(f"  هاروستر: {h.get('files')} فایل · تازه‌ترین {h.get('newest')} · {age}s پیش")
+        if isinstance(age, int) and age > 600:
+            print("  ! تیک تازه نمی‌رسد (age > 10min): سرویس با bars=0 کار می‌کند")
+    else:
+        print("  هاروستر: پوشه‌ای پیدا نشد")
