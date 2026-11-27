@@ -22,7 +22,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable
+import re
+from typing import Any, Callable, Sequence
 
 LOG = logging.getLogger("tradeagent.agent")
 
@@ -33,6 +34,13 @@ BLOCKED_TOOLS = {
     "confirm_proposal",
     "cancel_proposal",
 }
+
+# ابزارهایی که «دستور» می‌دهند یا وضعیت را عوض می‌کنند؛ هر چیز دیگری فقط داده می‌خواند.
+BLOCKED_PATTERN = re.compile(
+    r"^(open|close|modify|delete|set|place|send|withdraw|deposit|propose|confirm|cancel)_"
+    r"|_(order|orders)$|^propose_|^manage_|^panic$",
+    re.IGNORECASE,
+)
 
 DEFAULT_ALLOW = [
     "mt5_status",
@@ -81,6 +89,7 @@ Rules:
   'not_connected'. You always have tick data, so you can always judge momentum.
 - Numbers ending in _bp are basis points: 1 bp = 0.01 percent. Say "12 bp", never "12 percent".
   Quote the tool numbers as they are; do not rescale them.
+- "analysis" is ONE string (never an object), in Persian, not English.
 - Write "analysis", "reason" and every human text in Persian (فارسی); keep symbol names,
   numbers and field names exactly as the tools returned them.
 - If the data is insufficient (closed market, wide spread), say so in "analysis" and
@@ -166,6 +175,21 @@ def parse_agent_reply(text: str) -> dict[str, Any]:
     return {}
 
 
+def is_allowed_tool(name: str, allow: Sequence[str] | None, blocked: set[str]) -> bool:
+    """ابزار خواندنی آزاد است، ابزار دستوری نه.
+
+    قبلاً فقط فهرست سفید اجازه داشت و مدل برای MovingAverage/RelativeStrengthIndex خطای
+    «مجاز نیست» می‌گرفت، در حالی که این‌ها فقط عدد برمی‌گردانند.
+    """
+    if not name:
+        return False
+    if name in blocked or BLOCKED_PATTERN.search(name):
+        return False
+    if allow is None:
+        return True
+    return name in allow
+
+
 class ToolAgent:
     """حلقهٔ مدل ↔ ابزار، با سقف دور و سقف تعداد فراخوانی."""
 
@@ -183,7 +207,7 @@ class ToolAgent:
         self.mcp = mcp
         # ابزارهای محلی: از تیک‌های خودمان، بدون نیاز به متاتریدر/MCP
         self.local_tools: dict[str, Callable[..., Any]] = dict(local_tools or {})
-        self.allow = list(allow or DEFAULT_ALLOW)
+        self.allow = list(allow) if allow else None  # None = هر ابزار خواندنی
         self.blocked = set(blocked or BLOCKED_TOOLS)
         self.max_rounds = max(1, int(max_rounds))
         self.max_calls = max(0, int(max_calls))
@@ -216,7 +240,10 @@ class ToolAgent:
         if self.mcp is None:
             return local
         try:
-            tools = self.mcp.tools_for_prompt(allow=[t for t in self.allow if t not in self.blocked])
+            allowed = (
+                [t for t in self.allow if t not in self.blocked] if self.allow is not None else None
+            )
+            tools = self.mcp.tools_for_prompt(allow=allowed)
         except Exception as exc:  # noqa: BLE001 - هر خطای سرور نباید چرخه را بکشد
             LOG.warning("listing MCP tools failed: %s", exc)
             tools = []
@@ -247,7 +274,7 @@ class ToolAgent:
                     error=f"{type(exc).__name__}: {exc}",
                     elapsed_ms=int((time.time() - started) * 1000),
                 )
-        if name in self.blocked or name not in self.allow:
+        if not is_allowed_tool(name, self.allow, self.blocked):
             return ToolCallRecord(
                 tool=name,
                 arguments=args,
@@ -324,7 +351,14 @@ class ToolAgent:
                 trace.error = "پاسخ مدل JSON نبود"
                 trace.analysis = (reply or "").strip()[:400]
                 return trace
-            analysis = str(data.get("analysis") or "").strip()
+            raw_analysis = data.get("analysis")
+            if isinstance(raw_analysis, dict):
+                # بعضی مدل‌ها به‌جای رشته، آبجکت می‌دهند
+                analysis = "؛ ".join(
+                    f"{k}: {v}" for k, v in raw_analysis.items()
+                ).strip()
+            else:
+                analysis = str(raw_analysis or "").strip()
             if analysis:
                 trace.analysis = analysis[:600]
             momentum = data.get("momentum")

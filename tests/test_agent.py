@@ -366,3 +366,35 @@ def test_contract_survives_percent_formatting() -> None:
     text = CONTRACT % {"max_calls": 6}
     assert "at most 6 tools" in text
     assert "basis points" in text
+
+
+def test_read_only_mcp_tools_are_allowed_but_orders_are_not() -> None:
+    """MovingAverage/RelativeStrengthIndex فقط عدد می‌دهند؛ نباید رد شوند."""
+    from tradeagent.agent import is_allowed_tool
+
+    for name in ("MovingAverage", "RelativeStrengthIndex", "get_candles", "account_info"):
+        assert is_allowed_tool(name, None, set()), name
+    for name in ("propose_order", "close_position", "set_policy", "confirm_proposal"):
+        assert not is_allowed_tool(name, None, set()), name
+
+
+def test_analysis_as_object_is_flattened() -> None:
+    """مدل گاهی analysis را آبجکت می‌دهد؛ گزارش نباید dict نشان دهد."""
+    replies = [
+        json.dumps(
+            {
+                "analysis": {"price_trend": "صعودی", "spread": "کم"},
+                "tool_calls": [{"tool": "local_tick_digest", "arguments": {}}],
+                "momentum": {"direction": "up", "phase": "steady"},
+                "proposal": None,
+            }
+        )
+    ]
+    agent = ToolAgent(
+        chat=lambda m: replies[0],
+        mcp=None,
+        local_tools={"local_tick_digest": lambda **_: {"last_price": 1.0}},
+        max_rounds=1,
+    )
+    trace = agent.run({})
+    assert trace.analysis == "price_trend: صعودی؛ spread: کم"
