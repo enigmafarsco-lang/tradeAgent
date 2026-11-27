@@ -36,6 +36,40 @@ status_file() {
   printf '%s' "$newest"
 }
 
+mt5_report() {
+  local prefix="${MT5_WINEPREFIX:-$HOME/Wine}"
+  step "۵) متاتریدر"
+  PREFIX="$prefix" python3 - <<'PY' 2>/dev/null || dim "خواندن وضعیت متاتریدر نشد"
+import os, pathlib, subprocess, time
+
+prefix = pathlib.Path(os.environ["PREFIX"])
+logs = sorted((prefix / "drive_c" / "Program Files" / "MetaTrader 5" / "MQL5" / "Logs").glob("*.log"),
+              key=lambda f: f.stat().st_mtime)
+
+try:
+    out = subprocess.run(["pgrep", "-af", "terminal64.exe"], capture_output=True, text=True, timeout=5).stdout
+    procs = [l for l in out.splitlines() if "pgrep" not in l]
+except (OSError, subprocess.SubprocessError):
+    procs = []
+if procs:
+    print(f"  terminal64.exe: running ({procs[0][:80]})")
+else:
+    print("  terminal64.exe: NOT running - متاتریدر باز نیست")
+if not logs:
+    print(f"  Experts log: پیدا نشد زیر {prefix}/drive_c/.../MQL5/Logs")
+else:
+    f = logs[-1]
+    age = int(time.time() - f.stat().st_mtime)
+    print(f"  Experts log: {f.name} (آخرین نوشتن {age}s پیش)")
+    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    keep = [l for l in lines if "trade-mcp" in l.lower() or "TradeMCPConnector" in l]
+    for l in (keep[-2:] if keep else lines[-2:]):
+        print(f"    {l[:150]}")
+    if not keep:
+        print("    (هیچ خط trade-mcp در این فایل نیست: اکسپرت اجرا نشده)")
+PY
+}
+
 show_bridge() {
   local f; f="$(status_file)"
   if [[ -z "$f" ]]; then
@@ -43,8 +77,11 @@ show_bridge() {
     return 0
   fi
   STATUS_FILE="$f" python3 - <<'PY' 2>/dev/null || dim "خواندن وضعیت پل نشد"
-import json, os, pathlib
-d = json.loads(pathlib.Path(os.environ["STATUS_FILE"]).read_text(encoding="utf-8"))
+import json, os, pathlib, time
+p = pathlib.Path(os.environ["STATUS_FILE"])
+d = json.loads(p.read_text(encoding="utf-8"))
+age = int(time.time() - p.stat().st_mtime)
+print(f"  (وضعیت {age}s پیش نوشته شده)")
 b = d.get("bridge") or {}
 a = d.get("account") or {}
 t = d.get("terminal") or {}
@@ -84,7 +121,8 @@ status() {
   fi
   step "۳) پل MCP"
   show_bridge
-  step "۴) آخرین چرخه"
+  mt5_report
+  step "۶) آخرین چرخه"
   if [[ -f var/reports/latest.md ]]; then
     grep -m 6 -E "momentum|جهت|فاز|شتاب|confidence|اطمینان" var/reports/latest.md \
       | sed 's/^/  /' || head -3 var/reports/latest.md | sed 's/^/  /'

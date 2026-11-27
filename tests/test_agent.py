@@ -217,3 +217,13 @@ def test_run_gold_has_a_restart_mode() -> None:
     body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
     assert '--restart) MODE="restart"' in body
     assert "systemctl --user restart tradeagent-gold.service" in body
+
+
+def test_run_gold_status_reports_mt5_itself() -> None:
+    """اگر اکسپرت وصل نیست، باید بگوید متاتریدر اصلاً باز است یا نه."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "scripts" / "run_gold.sh").read_text(encoding="utf-8")
+    assert "mt5_report()" in body
+    assert "terminal64.exe" in body and "NOT running" in body
+    assert "Experts log" in body
