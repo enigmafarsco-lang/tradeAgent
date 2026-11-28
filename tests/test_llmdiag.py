@@ -78,3 +78,28 @@ def test_verdict_notes_cpu_only_models() -> None:
                    "NAME ID SIZE PROCESSOR CONTEXT RUNNER UNTIL qwen 845 5.3GB 100% CPU 8192 llamacpp"),
     ]
     assert "CPU" in diag.verdict(probes, "qwen2.5:7b-instruct")
+
+
+def test_gpu_verdict_when_the_card_is_invisible() -> None:
+    probes = [diag.Probe("کارت NVIDIA (nvidia-smi)", False, "«nvidia-smi» نصب نیست")]
+    text = diag._gpu_verdict(probes)
+    assert "درایور" in text and "100% GPU" in text
+
+
+def test_gpu_verdict_when_vram_is_too_small() -> None:
+    probes = [
+        diag.Probe("کارت NVIDIA (nvidia-smi)", True, "RTX 3050, 4096 MiB, 3800 MiB, 550.1"),
+        diag.Probe("VRAM آزاد", False, "0.3 GB آزاد از 4.0 GB"),
+        diag.Probe("ollama از GPU استفاده کرد", False, "no compatible GPUs"),
+    ]
+    text = diag._gpu_verdict(probes)
+    assert "VRAM" in text and "1.5b" in text
+
+
+def test_gpu_verdict_when_everything_is_fine() -> None:
+    probes = [
+        diag.Probe("کارت NVIDIA (nvidia-smi)", True, "RTX 4070, 12288 MiB, 1000 MiB, 550.1"),
+        diag.Probe("VRAM آزاد", True, "11 GB آزاد"),
+        diag.Probe("ollama از GPU استفاده کرد", True, "library=cuda"),
+    ]
+    assert diag._gpu_verdict(probes) == ""

@@ -110,6 +110,7 @@ class LLMAdvisor:
         if self.provider == "ollama" and not is_text_model(self.ollama_model):
             LOG.warning("مدل ollama «%s» متنی نیست؛ یک مدل متنی بگذار", self.ollama_model)
         self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
+        self.ollama_num_ctx = int(cfg.get("llm.ollama_num_ctx", 2048) or 2048)
         self.timeout = float(cfg.get("llm.timeout_s", 45))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
         self.max_calls_per_hour = max(0, int(cfg.get("llm.max_calls_per_hour", 12)))
@@ -250,7 +251,7 @@ class LLMAdvisor:
             "model": self.ollama_model,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.35},
+            "options": {"temperature": 0.35, "num_ctx": self.ollama_num_ctx},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -284,7 +285,7 @@ class LLMAdvisor:
                 "stream": False,
                 # قرارداد ایجنت JSON است؛ حالت json مدل را از متن آزاد دور می‌کند
                 "format": "json",
-                "options": {"temperature": 0.3, "num_predict": 700},
+                "options": {"temperature": 0.3, "num_predict": 700, "num_ctx": self.ollama_num_ctx},
                 "messages": messages,
             }
             # ollama هنگام بارگذاری مدل 503 می‌دهد؛ چند بار با تأخیر تلاش کن

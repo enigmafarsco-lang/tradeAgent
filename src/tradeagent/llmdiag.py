@@ -55,6 +55,46 @@ def _run(cmd: list[str], timeout: float = 8.0) -> str:
         return f"{type(exc).__name__}: {exc}"
 
 
+
+def gpu_report() -> list[Probe]:
+    """کارت گرافیک: هست؟ درایور دیده می‌شود؟ VRAM چقدر آزاد است؟ ollama از CUDA استفاده کرد؟"""
+    probes: list[Probe] = []
+    smi = _run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,driver_version",
+                "--format=csv,noheader"], timeout=8.0)
+    has_card = "MiB" in smi and "," in smi
+    probes.append(Probe("کارت NVIDIA (nvidia-smi)", has_card, smi))
+
+    if not has_card:
+        probes.append(Probe("درایور NVIDIA", False,
+                            "nvidia-smi نیست: درایور نصب/بالا نیست، پس ollama مجبور است روی CPU اجرا کند"))
+        return probes
+
+    try:
+        row = smi.splitlines()[0]
+        parts = [x.strip() for x in row.split(",")]
+        total = float(parts[1].replace("MiB", "").strip())
+        used = float(parts[2].replace("MiB", "").strip())
+        free_gb = round((total - used) / 1024.0, 1)
+        probes.append(Probe("VRAM آزاد", free_gb >= 3.0, f"{free_gb} GB آزاد از {round(total / 1024.0, 1)} GB"))
+    except (IndexError, ValueError):
+        free_gb = 0.0
+
+    logs = _run(["journalctl", "--user", "-u", "ollama", "-n", "200", "--no-pager"], timeout=8.0)
+    if "No entries" in logs or "نصب نیست" in logs:
+        logs = _run(["journalctl", "-u", "ollama", "-n", "200", "--no-pager"], timeout=8.0)
+    low = logs.lower()
+    gpu_lines = [line for line in logs.splitlines()
+                 if any(k in line.lower() for k in ("cuda", "gpu", "nvidia", "vram", "library="))]
+    used_gpu = "library=cuda" in low or "offload" in low and "cuda" in low
+    no_gpu = "no compatible gpus" in low or "cpu only" in low
+    probes.append(Probe(
+        "ollama از GPU استفاده کرد",
+        used_gpu and not no_gpu,
+        ("\n".join(gpu_lines[-6:]) or "خط مرتبط با GPU در لاگ نبود"),
+    ))
+    return probes
+
+
 def candidate_urls(current: str) -> list[str]:
     """همان پورت روی آدرس‌های مختلف: IPv4، localhost و IPv6 ممکن است به دو سرویس مختلف برسند."""
     from urllib.parse import urlparse
@@ -127,6 +167,7 @@ def diagnose(base_url: str, model: str) -> list[Probe]:
         logs = _run(["journalctl", "-u", "ollama", "-n", "15", "--no-pager"])
     probes.append(Probe("لاگ سرویس ollama", bool(logs.strip()) and "No entries" not in logs, logs))
     probes.append(Probe("چه کسی روی پورت گوش می‌دهد", True, listeners()))
+    probes.extend(gpu_report())
     return probes
 
 
@@ -139,9 +180,34 @@ def best_url(probes: list[Probe]) -> str | None:
 
 
 def verdict(probes: list[Probe], model: str) -> str:
-    """جملهٔ آخر: چه کاری واقعاً لازم است."""
+    """جملهٔ آخر: چه کاری واقعاً لازم است (اول کارت گرافیک، بعد آدرس)."""
     by_name = {p.name: p for p in probes}
+    gpu_issue = _gpu_verdict(probes)
+    url_issue = _url_verdict(probes, model)
+    if gpu_issue and url_issue:
+        return gpu_issue + " — و " + url_issue
+    return gpu_issue or url_issue
 
+
+def _gpu_verdict(probes: list[Probe]) -> str:
+    card = next((p for p in probes if p.name.startswith("کارت NVIDIA")), None)
+    vram = next((p for p in probes if p.name.startswith("VRAM")), None)
+    on_gpu = next((p for p in probes if p.name.startswith("ollama از GPU")), None)
+    if card and not card.ok:
+        return ("کارت NVIDIA به ollama نمی‌رسد (nvidia-smi جواب نمی‌دهد): درایور را نصب/به‌روز کن و "
+                "`systemctl --user restart ollama` بزن؛ بعد `ollama ps` باید «100% GPU» بنویسد.")
+    if card and card.ok and on_gpu and not on_gpu.ok:
+        if vram and not vram.ok:
+            return (f"کارت هست ولی VRAM آزاد کم است ({vram.detail})؛ مدل ۷b جا نمی‌شود. "
+                    "مدل کوچک‌تر بگیر: `ollama pull qwen2.5:1.5b-instruct` و "
+                    "`--model qwen2.5:1.5b-instruct --num-ctx 2048`، یا برنامه‌های VRAM‌گیر را ببند.")
+        return ("کارت و درایور دیده می‌شوند ولی ollama روی CPU اجرا شد: ollama را به‌روز کن "
+                "(`curl -fsSL https://ollama.com/install.sh | sh`) و سرویس را ری‌استارت کن.")
+    return ""
+
+
+def _url_verdict(probes: list[Probe], model: str) -> str:
+    by_name = {p.name: p for p in probes}
     working = best_url(probes)
     if working:
         ps = next((p for p in probes if p.name.startswith("مدل‌های بارگذاری‌شده")), None)

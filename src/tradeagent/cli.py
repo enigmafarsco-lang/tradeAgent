@@ -102,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--doctor", action="store_true",
                           help="فقط مدل را عیب‌یابی کن: چرا ollama جواب نمی‌دهد")
     p_studio.add_argument("--model", default=None, help="نام مدل ollama (مثلاً qwen2.5:1.5b-instruct)")
+    p_studio.add_argument("--num-ctx", type=int, default=None,
+                          help="اندازهٔ context مدل (کوچک‌تر = VRAM کمتر، مثلاً 2048)")
     p_studio.add_argument("--ollama-url", default=None,
                           help="آدرس ollama (مثلاً http://[::1]:11434 اگر IPv4 جواب نمی‌دهد)")
     p_studio.add_argument("--scan", action="store_true",
@@ -432,6 +434,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
             cfg.set("llm.ollama_model", args.model)
         if args.ollama_url:
             cfg.set("llm.ollama_url", args.ollama_url)
+        if args.num_ctx:
+            cfg.set("llm.ollama_num_ctx", args.num_ctx)
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = advisor.preflight()
         if not ok and not args.ollama_url:
