@@ -152,6 +152,7 @@ class Studio:
         self.cost_bp = cost_bp
         self.min_conf = min_conf
         self.extra_dirs = [Path(d) for d in extra_dirs]
+        self.data_stats: dict[str, Any] = {}
         self.cache: dict[str, Any] = self._load_cache()
         self.candles: list[Candle] = []
         self.preds: list[Prediction] = []
@@ -235,6 +236,7 @@ class Studio:
 
     def stats(self) -> dict[str, Any]:
         scored = [p for p in self.preds if p.hit is not None]
+        directional = [p for p in scored if p.direction != "flat"]
         bets = [p for p in scored if p.direction != "flat"]
         net = sum((p.actual_bp if p.direction == "up" else -p.actual_bp) - self.cost_bp for p in bets)
         return {
@@ -243,6 +245,9 @@ class Studio:
             "hits": sum(p.hit or 0 for p in scored),
             "hit_pct": round(100.0 * sum(p.hit or 0 for p in scored) / len(scored), 1) if scored else 0.0,
             "bets": len(bets),
+            "dir_scored": len(directional),
+            "dir_hit_pct": round(100.0 * sum(p.hit or 0 for p in directional) / len(directional), 1)
+            if directional else 0.0,
             "net_bp": round(net, 2) if bets else 0.0,
             "avg_bp": round(net / len(bets), 2) if bets else 0.0,
             "failures": self.failures,
@@ -259,7 +264,7 @@ class Studio:
                 extra += [d for d in discover_tick_dirs(self.symbol, [self.root])
                           if str(d) != str(self.root)]
             self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache",
-                                        extra_dirs=extra)
+                                        extra_dirs=extra, stats=self.data_stats)
         return len(self.candles) >= self.window + self.horizon + 5
 
     def step(self) -> dict[str, Any] | None:
@@ -326,9 +331,8 @@ class Studio:
     def walk(self, step_override: int | None = None, limit: int | None = None,
              start_i: int | None = None,
              progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-        if not self.candles:
-            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache",
-                                        extra_dirs=self.extra_dirs)
+        if not self.ensure_data():
+            return {"ok": False, "error": f"کندل کافی نیست: {len(self.candles)}"}
         n = len(self.candles)
         if n < self.window + self.horizon + 5:
             return {"ok": False, "error": f"کندل کافی نیست: {n}"}
@@ -364,6 +368,20 @@ class Studio:
         return {"ok": True, **self.stats(), "candles": n, "step_min": step}
 
     # -- ذخیره -----------------------------------------------------------
+    def coverage(self) -> dict[str, Any]:
+        """چه داده‌ای خوانده شد: فایل‌ها، تیک، کندل، شکاف‌ها."""
+        cs = self.candles
+        gaps = sum(1 for a, b in zip(cs, cs[1:]) if (b.t - a.t) > 60)
+        return {
+            "candles": len(cs),
+            "first": cs[0].t if cs else 0,
+            "last": cs[-1].t if cs else 0,
+            "gaps": gaps,
+            "files": len(self.data_stats.get("files") or {}),
+            "ticks": self.data_stats.get("ticks", 0),
+            "source": self.data_stats.get("root", str(self.root)),
+        }
+
     def state(self) -> dict[str, Any]:
         candles = self.candles
         return {
@@ -378,6 +396,8 @@ class Studio:
             "preds": [asdict(p) for p in self.preds[-400:]],
             "trades": [asdict(t) for t in self.trades[-200:]],
             "trade_stats": self.trade_stats(),
+            "candles_total": len(candles),
+            "coverage": self.coverage(),
             "cursor": self._cursor,
             "total_steps": max(0, len(self.candles) - self.horizon - (self.window - 1)),
             "baselines": self._baselines(),
@@ -452,7 +472,14 @@ th{background:#16233c;color:var(--muted)}
   <button class="ghost" onclick="go(0)">تا آخر</button>
 </div>
 <div class="cards" id="cards"></div>
-<canvas id="chart" height="380"></canvas>
+<div style="margin:8px 0">
+  <button class="ghost" onclick="setWin(90)">۹۰ کندل</button>
+  <button class="ghost" onclick="setWin(180)">۱۸۰ کندل</button>
+  <button class="ghost" onclick="setWin(360)">۳۶۰ کندل</button>
+  <button class="ghost" onclick="toggleFollow()" id="fb">همراه تصمیم: روشن</button>
+  <span class="muted" id="cov"></span>
+</div>
+<canvas id="chart" height="400"></canvas>
 <div class="muted" id="legend">▲/▼ = تصمیم ایجنت روی کندل · خط‌چین = از قیمت تصمیم تا قیمت واقعی بعد از افق · سبز یعنی درست</div>
 <h2>معاملات کاغذی</h2>
 <table><thead><tr><th>زمان</th><th>جهت</th><th>ورود</th><th>خروج</th><th>bp</th><th>نتیجه</th><th>اطمینان</th><th>دلیل</th></tr></thead>
@@ -463,51 +490,105 @@ th{background:#16233c;color:var(--muted)}
 <script>
 let state=null, busy=false;
 const fmt=t=>new Date(t*1000).toISOString().slice(5,16).replace('T',' ');
+let WIN = 180;           // چند کندل روی چارت
+let follow = true;       // پنجره همراه تصمیم فعلی جلو برود
 function draw(){
-  const c=document.getElementById('chart'); if(!state||!state.candles.length) return;
-  const dpr=window.devicePixelRatio||1; c.width=c.clientWidth*dpr; c.height=380*dpr;
+  const c=document.getElementById('chart'); if(!state||!state.candles||!state.candles.length) return;
+  const dpr=window.devicePixelRatio||1; c.width=c.clientWidth*dpr; c.height=400*dpr;
   const ctx=c.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-  const W=c.clientWidth,H=380,pad=8;
-  const cs=state.candles.slice(-240), first=cs[0].t;
-  const hi=Math.max(...cs.map(x=>x.h)), lo=Math.min(...cs.map(x=>x.l));
-  const y=v=>pad+(hi-v)/(hi-lo||1)*(H-2*pad);
-  const step=(W-2*pad)/cs.length, bw=Math.max(1.5,step*0.62);
-  const xOf=t=>pad+((t-first)/60)*step+step/2;
+  const W=c.clientWidth,H=400,padL=8,padR=64,padT=10,padB=22;
+  const all=state.candles;
+  const idxOf={}; all.forEach((x,i)=>{idxOf[x.t]=i;});
+  // پنجره: تا تصمیم فعلی (یا آخر داده)
+  const lastIdx=all.length-1;
+  const anchor = (follow && state.cursor) ? Math.min(state.cursor+state.horizon+2, lastIdx) : lastIdx;
+  const endI=Math.max(WIN, anchor), startI=Math.max(0, endI-WIN);
+  const cs=all.slice(startI, endI+1);
+  if(!cs.length) return;
+  const predsIn=(state.preds||[]).filter(p=>idxOf[p.t]!==undefined && idxOf[p.t]>=startI && idxOf[p.t]<=endI);
+  const extra=cs.length+state.horizon+2;             // جای نمودار آینده
+  const futures=[];                                   // پیش‌بینی آینده: از آخرین تصمیم
+  const lastPred=(state.preds||[])[state.preds.length-1];
+  const hi0=Math.max(...cs.map(x=>x.h)), lo0=Math.min(...cs.map(x=>x.l));
+  const hi=hi0, lo=lo0;
+  const plotW=W-padL-padR;
+  const step=plotW/extra;
+  const y=v=>padT+(hi-v)/((hi-lo)||1)*(H-padT-padB);
+  const xAt=k=>padL+k*step+step/2;                     // k = ایندکس داخل پنجره
   ctx.fillStyle='#0b1120'; ctx.fillRect(0,0,W,H);
-  cs.forEach((x,i)=>{
-    const cx=pad+i*step+step/2;
+  // خطوط قیمت
+  ctx.font='11px system-ui'; ctx.textAlign='right';
+  for(let g=0; g<=4; g++){
+    const v=lo+(hi-lo)*g/4, yy=y(v);
+    ctx.strokeStyle='rgba(31,43,69,.8)'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#8ba0c7'; ctx.fillText(v.toFixed(2), W-padR+56, yy+4);
+  }
+  // کندل‌ها
+  const bw=Math.max(1.2, step*0.62);
+  cs.forEach((x,k)=>{
+    const cx=xAt(k);
     ctx.strokeStyle=x.c>=x.o?'#22c55e':'#ef4444'; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(cx,y(x.h)); ctx.lineTo(cx,y(x.l)); ctx.stroke();
     ctx.fillStyle=ctx.strokeStyle;
     const top=y(Math.max(x.o,x.c)), bot=y(Math.min(x.o,x.c));
     ctx.fillRect(cx-bw/2, top, bw, Math.max(1,bot-top));
   });
-  const closeAt=t=>{const i=Math.round((t-first)/60); return i>=0&&i<cs.length?cs[i].c:null;};
-  (state.preds||[]).forEach(p=>{
-    const entry=closeAt(p.t); if(entry===null) return;
-    const exitT=p.t+state.horizon*60, exitPx=closeAt(exitT);
-    const px=xOf(p.t);
+  // پیش‌بینی‌ها: نشانگر + خط تا قیمت واقعی بعد از افق
+  predsIn.forEach(p=>{
+    const k=idxOf[p.t]-startI;
+    const cx=xAt(k), ey=y(p.entry);
     ctx.fillStyle=p.direction==='up'?'#22c55e':p.direction==='down'?'#ef4444':'#94a3b8';
-    ctx.beginPath(); ctx.arc(px,y(entry)+(p.direction==='down'?9:-9),3.2,0,6.28); ctx.fill();
-    if(exitPx!==null){
-      const good=p.hit===1;
-      ctx.strokeStyle=p.hit===null?'#64748b':(good?'rgba(34,197,94,.9)':'rgba(239,68,68,.9)');
-      ctx.setLineDash([3,3]); ctx.beginPath();
-      ctx.moveTo(px,y(entry)); ctx.lineTo(xOf(exitT),y(exitPx)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(cx, ey+(p.direction==='down'?8:-8), 3.4, 0, 6.28); ctx.fill();
+    const k2=k+state.horizon;
+    if(k2<=cs.length-1 && p.actual_bp!==null){
+      const px2=cs[k2].c;
+      ctx.strokeStyle=p.hit?'rgba(34,197,94,.95)':'rgba(239,68,68,.95)';
+      ctx.setLineDash([3,3]); ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(cx,ey); ctx.lineTo(xAt(k2),y(px2)); ctx.stroke(); ctx.setLineDash([]);
+      ctx.setLineDash([]); 
+      ctx.fillStyle=ctx.strokeStyle;
+      ctx.beginPath(); ctx.arc(xAt(k2),y(px2),2.4,0,6.28); ctx.fill();
     }
   });
+  // نمودار آینده: مسیر پیش‌بینی‌شدهٔ افق بعد از آخرین تصمیم
+  if(lastPred){
+    const k0=cs.length-1;
+    const p0=y(cs[k0].c);
+    const dir=lastPred.direction==='up'?1:lastPred.direction==='down'?-1:0;
+    const scale=Math.max(2,(hi-lo)*0.18)*Math.max(0.35,lastPred.confidence||0.5);
+    ctx.strokeStyle=dir>0?'#22c55e':dir<0?'#ef4444':'#94a3b8';
+    ctx.setLineDash([6,4]); ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(xAt(k0), p0);
+    const kEnd=k0+state.horizon;
+    ctx.lineTo(xAt(kEnd), y(cs[k0].c+dir*scale)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle=ctx.strokeStyle;
+    ctx.beginPath(); ctx.arc(xAt(kEnd), y(cs[k0].c+dir*scale), 3.5, 0, 6.28); ctx.fill();
+    ctx.font='11px system-ui'; ctx.textAlign='left';
+    ctx.fillText('آیندهٔ '+(lastPred.direction==='up'?'صعودی':lastPred.direction==='down'?'نزولی':'خنثی'),
+                 Math.min(W-70, xAt(kEnd)+4), Math.max(14, y(cs[k0].c+dir*scale)-8));
+  }
+  // محور زمان
+  ctx.fillStyle='#8ba0c7'; ctx.textAlign='center'; ctx.font='11px system-ui';
+  [0, Math.floor(cs.length/2), cs.length-1].forEach(k=>{
+    const d=new Date(cs[k].t*1000); ctx.fillText(d.toISOString().slice(5,16).replace('T',' '), xAt(k), H-6);
+  });
+  draw._win = {startI, endI};
 }
 function render(){
   if(!state) return;
-  const s=state.stats||{}, ts=state.trade_stats||{};
+  const s=state.stats||{}, ts=state.trade_stats||{}, cov=state.coverage||{};
   document.getElementById('upd').textContent='آخرین به‌روزرسانی: '+state.updated+
     ' · افق '+state.horizon+' کندل · گام '+state.step_min+' دقیقه'+
     (s.last_error?(' · خطای مدل: '+s.last_error.slice(0,60)):'');
-  document.getElementById('prog').textContent='قدم '+Math.max(0,(state.cursor||0)-(state.candles.length? 29:0))+' از '+ (state.total_steps||0);
+  document.getElementById('cov').textContent = cov.candles ?
+    ('داده: '+(cov.files||0)+' فایل · '+(cov.ticks||0).toLocaleString('en-US')+' تیک · '+
+     cov.candles+' کندل M1 · '+fmt(cov.first)+' → '+fmt(cov.last)+' · شکاف: '+(cov.gaps||0)) : '';
+  document.getElementById('prog').textContent='قدم '+(s.predictions||0)+' از '+(state.total_steps||0);
   const cards=[['پیش‌بینی',s.predictions||0],['سنجیده',s.scored||0],['درست',(s.hit_pct||0)+'%'],
     ['خالص تحلیل',((s.net_bp||0)>=0?'+':'')+(s.net_bp||0)+'bp'],
-    ['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
-    ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],['باز',ts.open||0]];
+    ['دقت جهت‌دار',(s.dir_hit_pct||0)+'%'],['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
+    ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],
+    ['هزینه',(ts.cost_paid_bp||0)+'bp'],['باز',ts.open||0]];
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   const rows=(state.preds||[]).slice(-20).reverse().map(p=>{
     const act=p.actual_bp===null?'—':((p.actual_bp>0?'+':'')+p.actual_bp+'bp');
@@ -526,6 +607,8 @@ function render(){
   document.getElementById('trades').innerHTML=trs||'<tr><td colspan="8" class="muted">هنوز معامله‌ای نیست</td></tr>';
   draw();
 }
+function setWin(n){ WIN=n; draw(); }
+function toggleFollow(){ follow=!follow; document.getElementById('fb').textContent='همراه تصمیم: '+(follow?'روشن':'خاموش'); draw(); }
 async function pull(){ try{const r=await fetch('api/state',{cache:'no-store'}); state=await r.json(); render();}catch(e){} }
 async function go(n){
   if(busy) return; busy=true;

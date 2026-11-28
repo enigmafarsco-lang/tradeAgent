@@ -170,3 +170,24 @@ def test_the_rule_stays_flat_inside_the_no_trade_band(tmp_path) -> None:
         studio.step()
     assert all(p.direction == "flat" for p in studio.preds)
     assert studio.trade_stats()["trades"] == 0
+
+
+def test_state_reports_coverage_and_directional_accuracy(tmp_path) -> None:
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=20)
+    state = studio.state()
+    cov = state["coverage"]
+    assert cov["candles"] > 100 and cov["files"] >= 1 and cov["ticks"] > 1000
+    assert cov["first"] < cov["last"]
+    stats = state["stats"]
+    assert 0 <= stats["dir_hit_pct"] <= 100 and stats["dir_scored"] > 0
+    assert state["candles_total"] == cov["candles"]
+
+
+def test_app_draws_predictions_and_a_future_path() -> None:
+    page = app_html("XAUUSD_i", 8620)
+    assert "آیندهٔ" in page                 # نمودار آینده
+    assert "idxOf" in page                  # نگاشت زمانی با ایندکس، نه حساب دقیقه
+    assert "setWin" in page and "coverage" in page
+    assert "dir_hit_pct" in page
