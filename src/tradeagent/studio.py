@@ -160,6 +160,7 @@ class Studio:
         self.last_error = ""
         self._saved = 0
         self._cursor: int | None = None
+        self._full_write = False
         self.trades: list[Trade] = []
         self.started = time.time()
 
@@ -291,6 +292,42 @@ class Studio:
         self.save()
         return asdict(point)
 
+    def rewind(self) -> None:
+        """برگرد به اول داده: دفتر تصمیم‌ها و معاملات پاک می‌شود."""
+        self.preds = []
+        self.trades = []
+        self._cursor = None
+        self._saved = 0
+        self.failures = 0
+        self.last_error = ""
+        self._full_write = True
+        self.save()
+
+    def seek(self, steps: int) -> int:
+        """تا قدم شمارهٔ `steps` جلو برو (از اول، با همان داده و کش)."""
+        if not self.ensure_data():
+            return 0
+        self.rewind()
+        made = 0
+        while made < max(0, int(steps)):
+            if self.step() is None:
+                break
+            made += 1
+        self.save()
+        return made
+
+    def step_back(self) -> bool:
+        """یک تصمیم عقب: دفتر از نو ساخته می‌شود تا قدم قبل."""
+        cur = self._cursor if self._cursor is not None else 0
+        start = self.window - 1
+        step_units = max(1, int(getattr(self, "_step_override", 0) or self.step_min))
+        target = max(0, (cur - start) // step_units - 1)
+        if target <= 0:
+            self.rewind()
+            return False
+        self.seek(target)
+        return True
+
     def _maybe_trade(self, point: Prediction) -> None:
         if point.direction == "flat" or point.confidence < self.min_conf:
             return
@@ -399,6 +436,7 @@ class Studio:
             "candles_total": len(candles),
             "coverage": self.coverage(),
             "cursor": self._cursor,
+            "step_index": len(self.preds),
             "total_steps": max(0, len(self.candles) - self.horizon - (self.window - 1)),
             "baselines": self._baselines(),
         }
@@ -424,11 +462,13 @@ class Studio:
         self.out.mkdir(parents=True, exist_ok=True)
         try:
             (self.out / "state.json").write_text(json.dumps(self.state(), ensure_ascii=False), encoding="utf-8")
-            fresh = self.preds[self._saved:]
-            if fresh:
-                with (self.out / "predictions.jsonl").open("a", encoding="utf-8") as fh:
+            mode = "w" if self._full_write else "a"
+            fresh = self.preds if self._full_write else self.preds[self._saved:]
+            if fresh or self._full_write:
+                with (self.out / "predictions.jsonl").open(mode, encoding="utf-8") as fh:
                     for p in fresh:
                         fh.write(json.dumps(asdict(p), ensure_ascii=False) + "\n")
+            self._full_write = False
             self._saved = len(self.preds)
             self._save_cache()
         except OSError as exc:
@@ -466,10 +506,18 @@ th{background:#16233c;color:var(--muted)}
 <h1>استودیو ایجنت — <span id="sym">SYMBOL</span> <span class="muted" id="prog"></span></h1>
 <div class="muted" id="upd">…</div>
 <div style="margin:10px 0">
+  <button class="ghost" onclick="api('reset')">⏮ از اول</button>
+  <button class="ghost" onclick="api('prev')">◀ عقب</button>
   <button id="b1" onclick="go(1)">قدم بعد ▶</button>
   <button class="ghost" onclick="go(5)">۵ قدم</button>
   <button class="ghost" onclick="go(25)">۲۵ قدم</button>
   <button class="ghost" onclick="go(0)">تا آخر</button>
+</div>
+<div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px">
+  <input id="seek" type="range" min="0" max="0" value="0" style="flex:1"
+         oninput="document.getElementById('seekv').textContent=this.value"
+         onchange="api('goto', this.value)">
+  <span class="muted">قدم <b id="seekv">0</b></span>
 </div>
 <div class="cards" id="cards"></div>
 <div style="margin:8px 0">
@@ -501,8 +549,13 @@ function draw(){
   const idxOf={}; all.forEach((x,i)=>{idxOf[x.t]=i;});
   // پنجره: تا تصمیم فعلی (یا آخر داده)
   const lastIdx=all.length-1;
-  const anchor = (follow && state.cursor) ? Math.min(state.cursor+state.horizon+2, lastIdx) : lastIdx;
-  const endI=Math.max(WIN, anchor), startI=Math.max(0, endI-WIN);
+  // تصمیم فعلی حدود ۶۵٪ عرض بنشیند تا حرکت روی چارت دیده شود، نه پرش به انتها
+  const cur = (state.cursor!==null && state.cursor!==undefined)
+    ? state.cursor
+    : ((state.step_index||0) > 0 ? lastIdx : 30);   // بعد از «از اول» چارت به آغاز داده برمی‌گردد
+  let startI = Math.round(cur - WIN*0.65);
+  startI = Math.max(0, Math.min(startI, Math.max(0, all.length-WIN-1)));
+  const endI = Math.min(lastIdx, startI + WIN);
   const cs=all.slice(startI, endI+1);
   if(!cs.length) return;
   const predsIn=(state.preds||[]).filter(p=>idxOf[p.t]!==undefined && idxOf[p.t]>=startI && idxOf[p.t]<=endI);
@@ -567,6 +620,16 @@ function draw(){
     ctx.fillText('آیندهٔ '+(lastPred.direction==='up'?'صعودی':lastPred.direction==='down'?'نزولی':'خنثی'),
                  Math.min(W-70, xAt(kEnd)+4), Math.max(14, y(cs[k0].c+dir*scale)-8));
   }
+  // خط «اکنون»: کجای تاریخ ایستاده‌ایم
+  if(state.cursor!==null && state.cursor!==undefined && state.cursor<=lastIdx){
+    const k=state.cursor-startI;
+    if(k>=0 && k<cs.length){
+      ctx.strokeStyle='rgba(250,204,21,.55)'; ctx.setLineDash([2,4]); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(xAt(k),padT); ctx.lineTo(xAt(k),H-padB); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle='rgba(250,204,21,.9)'; ctx.textAlign='center'; ctx.font='11px system-ui';
+      ctx.fillText('اکنون', xAt(k), padT+11);
+    }
+  }
   // محور زمان
   ctx.fillStyle='#8ba0c7'; ctx.textAlign='center'; ctx.font='11px system-ui';
   [0, Math.floor(cs.length/2), cs.length-1].forEach(k=>{
@@ -574,8 +637,12 @@ function draw(){
   });
   draw._win = {startI, endI};
 }
-function render(){
+let lastSig='';
+function render(force){
   if(!state) return;
+  const sig=(state.updated||'')+'|'+(state.step_index||0)+'|'+((state.trades||[]).length);
+  if(!force && sig===lastSig){ draw(); return; }   // چیزی عوض نشده: صفحه را نلرزان
+  lastSig=sig;
   const s=state.stats||{}, ts=state.trade_stats||{}, cov=state.coverage||{};
   document.getElementById('upd').textContent='آخرین به‌روزرسانی: '+state.updated+
     ' · افق '+state.horizon+' کندل · گام '+state.step_min+' دقیقه'+
@@ -583,7 +650,10 @@ function render(){
   document.getElementById('cov').textContent = cov.candles ?
     ('داده: '+(cov.files||0)+' فایل · '+(cov.ticks||0).toLocaleString('en-US')+' تیک · '+
      cov.candles+' کندل M1 · '+fmt(cov.first)+' → '+fmt(cov.last)+' · شکاف: '+(cov.gaps||0)) : '';
-  document.getElementById('prog').textContent='قدم '+(s.predictions||0)+' از '+(state.total_steps||0);
+  document.getElementById('prog').textContent='قدم '+(state.step_index||s.predictions||0)+' از '+(state.total_steps||0);
+  const seek=document.getElementById('seek');
+  if(seek){ seek.max=state.total_steps||0; seek.value=state.step_index||0;
+            document.getElementById('seekv').textContent=state.step_index||0; }
   const cards=[['پیش‌بینی',s.predictions||0],['سنجیده',s.scored||0],['درست',(s.hit_pct||0)+'%'],
     ['خالص تحلیل',((s.net_bp||0)>=0?'+':'')+(s.net_bp||0)+'bp'],
     ['دقت جهت‌دار',(s.dir_hit_pct||0)+'%'],['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
@@ -609,16 +679,25 @@ function render(){
 }
 function setWin(n){ WIN=n; draw(); }
 function toggleFollow(){ follow=!follow; document.getElementById('fb').textContent='همراه تصمیم: '+(follow?'روشن':'خاموش'); draw(); }
+async function api(verb, n){
+  if(busy) return; busy=true;
+  const btn=document.getElementById('b1'); if(btn) btn.disabled=true;
+  try{
+    const q=(n===undefined||verb==='reset'||verb==='prev')?'':('?n='+n);
+    const r=await fetch('api/'+verb+q,{cache:'no-store'});
+    state=await r.json(); render(true);
+  }catch(e){} finally{ busy=false; if(btn) btn.disabled=false; }
+}
 async function pull(){ try{const r=await fetch('api/state',{cache:'no-store'}); state=await r.json(); render();}catch(e){} }
 async function go(n){
   if(busy) return; busy=true;
   const btn=document.getElementById('b1'); btn.disabled=true; btn.textContent='…';
   try{
     const r=await fetch('api/next?n='+n,{cache:'no-store'});
-    state=await r.json(); render();
+    state=await r.json(); render(true);
   }catch(e){} finally{ busy=false; btn.disabled=false; btn.textContent='قدم بعد ▶'; }
 }
-pull(); setInterval(pull,3000);
+pull(); setInterval(pull,5000);
 window.addEventListener('resize',draw);
 </script></body></html>""".replace("SYMBOL", symbol)
 
@@ -657,6 +736,36 @@ def serve(
             path = self.path.split("?")[0]
             if path in ("/", "/index.html"):
                 self._send(html_page, "text/html; charset=utf-8")
+                return
+            if studio is not None and path.startswith("/api/") and path.split("?")[0] in (
+                    "/api/next", "/api/prev", "/api/reset", "/api/goto"):
+                import urllib.parse
+
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                verb = path.split("?")[0]
+                try:
+                    n = int(qs.get("n", ["1"])[0])
+                except ValueError:
+                    n = 1
+                with lock:
+                    if not studio.ensure_data():
+                        self._send(json.dumps({"error": "داده کافی نیست"}).encode(), "application/json")
+                        return
+                    if verb == "/api/reset":
+                        studio.rewind()
+                    elif verb == "/api/prev":
+                        studio.step_back()
+                    elif verb == "/api/goto":
+                        studio.seek(n)
+                    elif n <= 0:                     # تا آخر
+                        studio.walk()
+                    else:
+                        for _ in range(min(n, 500)):
+                            if studio.step() is None:
+                                break
+                    studio.save()
+                    body = json.dumps(studio.state(), ensure_ascii=False).encode()
+                self._send(body, "application/json; charset=utf-8")
                 return
             if path.startswith("/api/next") and studio is not None:
                 n = 1

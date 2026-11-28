@@ -191,3 +191,52 @@ def test_app_draws_predictions_and_a_future_path() -> None:
     assert "idxOf" in page                  # نگاشت زمانی با ایندکس، نه حساب دقیقه
     assert "setWin" in page and "coverage" in page
     assert "dir_hit_pct" in page
+
+
+def test_seek_rewind_and_back_replay_the_same_decisions(tmp_path) -> None:
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=20)
+    assert len(studio.preds) == 20
+    moves = [p.direction for p in studio.preds]
+
+    studio.rewind()
+    assert studio.preds == [] and studio.trades == [] and studio._cursor is None
+
+    studio.seek(12)
+    assert len(studio.preds) == 12
+    assert [p.direction for p in studio.preds] == moves[:12]      # همان تصمیم‌ها، نه چیز دیگر
+
+    studio.step_back()
+    assert len(studio.preds) == 11
+    studio.step()
+    assert len(studio.preds) == 12
+
+    studio.seek(5)
+    lines = (tmp_path / "st" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 5                                       # فایل بازنویسی شد، نه انبار
+
+
+def test_navigation_endpoints_goto_prev_and_reset(tmp_path) -> None:
+    import threading
+    import time
+    import urllib.request
+
+    from tradeagent.studio import serve
+
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=30)
+    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8652),
+                     kwargs={"studio": studio}, daemon=True).start()
+    time.sleep(1.2)
+
+    def call(q):
+        return json.load(urllib.request.urlopen(f"http://127.0.0.1:8652/api/{q}"))
+
+    assert call("goto?n=10")["step_index"] == 10
+    assert call("next?n=1")["step_index"] == 11
+    assert call("prev")["step_index"] == 10
+    back = call("reset")
+    assert back["step_index"] == 0 and back["cursor"] is None
+    assert "seek" in app_html("XAUUSD_i", 8652)
