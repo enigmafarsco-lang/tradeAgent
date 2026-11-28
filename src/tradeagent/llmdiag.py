@@ -55,6 +55,44 @@ def _run(cmd: list[str], timeout: float = 8.0) -> str:
         return f"{type(exc).__name__}: {exc}"
 
 
+def candidate_urls(current: str) -> list[str]:
+    """همان پورت روی آدرس‌های مختلف: IPv4، localhost و IPv6 ممکن است به دو سرویس مختلف برسند."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(current)
+    port = parsed.port or 11434
+    out = [current]
+    for host in ("127.0.0.1", "localhost", "[::1]", "0.0.0.0"):
+        url = f"http://{host}:{port}"
+        if url not in out:
+            out.append(url)
+    return out
+
+
+def diagnose_hosts(urls: list[str], model: str) -> list[Probe]:
+    """کدام آدرس واقعاً جواب می‌دهد: همان پورت، سه میزبان مختلف."""
+    probes: list[Probe] = []
+    for url in urls:
+        code, body = _request(f"{url}/api/version", timeout=5.0)
+        code2, body2 = _request(f"{url}/api/generate",
+                                {"model": model, "prompt": "سلام", **TINY}, timeout=25.0)
+        ok = code2 == 200
+        detail = (f"version HTTP {code} {body[:60]} · generate HTTP {code2} {body2[:120]}")
+        probes.append(Probe(url, ok, detail))
+    return probes
+
+
+def listeners(port: int = 11434) -> str:
+    """چه کسی روی این پورت گوش می‌دهد (نشان می‌دهد دو سرویس وجود دارد)."""
+    for cmd in (["ss", "-ltnp"], ["netstat", "-ltnp"]):
+        out = _run(cmd, timeout=6.0)
+        if "نصب نیست" in out:
+            continue
+        rows = [line for line in out.splitlines() if f":{port}" in line]
+        return "\n".join(rows) if rows else out[:300]
+    return "ss/netstat نصب نیست"
+
+
 def diagnose(base_url: str, model: str) -> list[Probe]:
     """پنج گام: نسخه، فهرست مدل‌ها، تولید ساده، مسیر سازگار OpenAI، و لاگ سرویس."""
     base = base_url.rstrip("/")
@@ -78,6 +116,9 @@ def diagnose(base_url: str, model: str) -> list[Probe]:
     probes.append(Probe("مسیر سازگار OpenAI (v1/chat)", code == 200,
                         f"HTTP {code}: {body}" if code != 200 else body[:200]))
 
+    host_probes = diagnose_hosts(candidate_urls(base), model)
+    probes.extend(host_probes)
+
     ps = _run(["ollama", "ps"])
     probes.append(Probe("مدل‌های بارگذاری‌شده (ollama ps)", "NAME" in ps or "qwen" in ps, ps))
 
@@ -85,12 +126,30 @@ def diagnose(base_url: str, model: str) -> list[Probe]:
     if "نصب نیست" in logs or "No entries" in logs or not logs.strip():
         logs = _run(["journalctl", "-u", "ollama", "-n", "15", "--no-pager"])
     probes.append(Probe("لاگ سرویس ollama", bool(logs.strip()) and "No entries" not in logs, logs))
+    probes.append(Probe("چه کسی روی پورت گوش می‌دهد", True, listeners()))
     return probes
+
+
+def best_url(probes: list[Probe]) -> str | None:
+    """آدرسی که generate رویش جواب داده (اگر باشد)."""
+    for p in probes:
+        if p.name.startswith("http://") and p.ok:
+            return p.name
+    return None
 
 
 def verdict(probes: list[Probe], model: str) -> str:
     """جملهٔ آخر: چه کاری واقعاً لازم است."""
     by_name = {p.name: p for p in probes}
+
+    working = best_url(probes)
+    if working:
+        ps = next((p for p in probes if p.name.startswith("مدل‌های بارگذاری‌شده")), None)
+        note = ""
+        if ps and "CPU" in ps.detail:
+            note = " (مدل روی CPU اجرا می‌شود؛ کند است ولی کار می‌کند)"
+        return (f"مدل روی {working} جواب می‌دهد؛ استودیو را با «--ollama-url {working}» اجرا کن"
+                f" یا این آدرس را در configs بگذار.{note}")
     gen = next((p for p in probes if p.name.startswith("تولید متن")), None)
     if gen and gen.ok:
         return "مدل سالم است؛ استودیو باید با مدل کار کند."

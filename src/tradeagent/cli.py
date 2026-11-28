@@ -102,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--doctor", action="store_true",
                           help="فقط مدل را عیب‌یابی کن: چرا ollama جواب نمی‌دهد")
     p_studio.add_argument("--model", default=None, help="نام مدل ollama (مثلاً qwen2.5:1.5b-instruct)")
+    p_studio.add_argument("--ollama-url", default=None,
+                          help="آدرس ollama (مثلاً http://[::1]:11434 اگر IPv4 جواب نمی‌دهد)")
     p_studio.add_argument("--scan", action="store_true",
                           help="فقط بگو با این هزینه کدام افق جای سود دارد (بدون تصمیم‌گیری)")
     p_studio.add_argument("--rule", choices=["momentum", "trend"], default="momentum",
@@ -378,13 +380,17 @@ def cmd_studio(cfg: Any, args: Any) -> int:
 
     if getattr(args, "doctor", False):
         from .llm import LLMAdvisor
-        from .llmdiag import diagnose, format_report, verdict
+        from .llmdiag import best_url, diagnose, format_report, verdict
 
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         model = args.model or advisor.ollama_model
-        print(f"═══ عیب‌یابی مدل: {model} روی {advisor.ollama_url} ═══")
-        probes = diagnose(advisor.ollama_url, model)
+        url = args.ollama_url or advisor.ollama_url
+        print(f"═══ عیب‌یابی مدل: {model} روی {url} ═══")
+        probes = diagnose(url, model)
         print(format_report(probes, verdict(probes, model)))
+        fixed = best_url(probes)
+        if fixed and fixed != url:
+            print(f"  برای همین اجرا: ./scripts/studio.sh --serve --ollama-url {fixed}")
         return 0
 
     print(f"═══ استودیو: {symbol} · گام {args.step_min} دقیقه · افق {args.horizon} کندل ═══")
@@ -424,8 +430,21 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     if not args.no_llm:
         if args.model:
             cfg.set("llm.ollama_model", args.model)
+        if args.ollama_url:
+            cfg.set("llm.ollama_url", args.ollama_url)
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = advisor.preflight()
+        if not ok and not args.ollama_url:
+            from .llmdiag import candidate_urls
+
+            for alt in candidate_urls(advisor.ollama_url)[1:]:
+                cfg.set("llm.ollama_url", alt)
+                try_advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
+                ok_alt, why_alt = try_advisor.preflight()
+                if ok_alt:
+                    advisor, ok, why = try_advisor, True, why_alt
+                    print(f"  مدل روی {alt} جواب داد؛ همان استفاده می‌شود.")
+                    break
         if ok:
             print(f"  مدل: آماده است ({why[:40]})")
 

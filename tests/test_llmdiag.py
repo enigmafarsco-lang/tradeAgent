@@ -52,3 +52,29 @@ def test_studio_stops_calling_a_dead_model_after_three_errors(tmp_path) -> None:
     assert calls["n"] == 3                    # مدارشکن بعد از سه خطا
     assert studio.model_down is True
     assert all(p.source == "rule" for p in studio.preds)
+
+
+def test_candidate_urls_cover_all_local_addresses() -> None:
+    urls = diag.candidate_urls("http://127.0.0.1:11434")
+    assert urls[0] == "http://127.0.0.1:11434"
+    assert "http://localhost:11434" in urls
+    assert "http://[::1]:11434" in urls
+    assert len(urls) == len(set(urls))
+
+
+def test_best_url_picks_the_host_that_answers() -> None:
+    probes = [
+        diag.Probe("http://127.0.0.1:11434", False, "HTTP 503"),
+        diag.Probe("http://[::1]:11434", True, "HTTP 200"),
+    ]
+    assert diag.best_url(probes) == "http://[::1]:11434"
+    assert "::1" in diag.verdict(probes, "qwen2.5:7b-instruct")
+
+
+def test_verdict_notes_cpu_only_models() -> None:
+    probes = [
+        diag.Probe("http://127.0.0.1:11434", True, "HTTP 200"),
+        diag.Probe("مدل‌های بارگذاری‌شده (ollama ps)", True,
+                   "NAME ID SIZE PROCESSOR CONTEXT RUNNER UNTIL qwen 845 5.3GB 100% CPU 8192 llamacpp"),
+    ]
+    assert "CPU" in diag.verdict(probes, "qwen2.5:7b-instruct")
