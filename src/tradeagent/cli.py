@@ -93,12 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--step-min", type=int, default=1, help="هر چند دقیقه یک تصمیم")
     p_studio.add_argument("--horizon", type=int, default=3, help="افق: چند کندل M1 بعد")
     p_studio.add_argument("--limit", type=int, default=None, help="حداکثر چند تصمیم (برای آزمون سریع)")
-    p_studio.add_argument("--warm", type=int, default=40, help="چند قدم قبل از بالا آوردن اپ برود")
     p_studio.add_argument("--flat-bp", type=float, default=3.0, help="کمتر از این حرکت = خنثی")
     p_studio.add_argument("--min-conf", type=float, default=0.0,
                           help="کمترین اطمینان برای باز کردن معاملهٔ کاغذی")
     p_studio.add_argument("--no-llm", action="store_true", help="بدون مدل: فقط قاعدهٔ تکانه")
     p_studio.add_argument("--serve", action="store_true", help="اپ را روی پورت بالا بیاور")
+    p_studio.add_argument("--auto", action="store_true",
+                          help="با --serve: کل تاریخ را خودت جلو برو (بدون منتظر ماندن برای دکمه‌ها)")
+    p_studio.add_argument("--no-open", action="store_true", help="مرورگر را خودکار باز نکن")
+    p_studio.add_argument("--warm", type=int, default=30, help="چند قدم قبل از باز شدن اپ برود")
     p_studio.add_argument("--port", type=int, default=8620)
     p_studio.add_argument("--out", default="var/studio")
     p_lab.add_argument("--out", default="var/lab")
@@ -351,6 +354,13 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     from .llm import LLMAdvisor
     from .studio import Studio, serve
 
+    import sys
+
+    try:                                     # خروجی خط‌به‌خط، تا در فایل هم زنده دیده شود
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
+
     symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
     root = Path(args.data).expanduser() if args.data else Path("").resolve()
     out_dir = cfg.path(args.out, args.out)
@@ -380,18 +390,41 @@ def cmd_studio(cfg: Any, args: Any) -> int:
             print(f"  مدل جواب نداد: {why[:120]}")
             print("  ─ با قاعدهٔ تکانه جلو می‌رود و در جدول، منبع هر تصمیم «rule» نوشته می‌شود.")
 
-    studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min, horizon=args.horizon)
-    if args.limit:
-        studio.candles = []   # بارگذاری در walk
-
-    if args.serve:
-        threading.Thread(target=serve, args=(out_dir, symbol, args.port), daemon=True).start()
-        print(f"  اپ: http://127.0.0.1:{args.port}  (زنده به‌روز می‌شود)")
+    studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min,
+                    horizon=args.horizon, flat_bp=args.flat_bp, min_conf=args.min_conf,
+                    extra_dirs=logs)
 
     def progress(info: dict[str, Any]) -> None:
         eta = info.get("eta_s") or 0
         print(f"  پیشرفت: {info['made']}/{info['total']} · دقت تا اینجا {info['hit_pct']}% · "
               f"خالص {info['net_bp']:+.0f}bp · ~{eta // 60} دقیقه مانده", flush=True)
+
+    if args.serve:
+        # چند قدم اول را برو تا اپ از همان اول چارت و تصمیم داشته باشد
+        warm = max(1, int(args.warm))
+        studio.walk(limit=warm)
+        threading.Thread(target=serve, args=(out_dir, symbol, args.port),
+                         kwargs={"studio": studio}, daemon=True).start()
+        url = f"http://127.0.0.1:{args.port}"
+        print("  " + "─" * 40)
+        print(f"  اپ آماده است: {url}")
+        print("  دکمه‌های «قدم بعد / ۵ قدم / تا آخر» ایجنت را جلو می‌برند.")
+        print("  " + "─" * 40)
+        if not args.no_open:
+            try:
+                import webbrowser
+
+                webbrowser.open(url)
+            except Exception:  # noqa: BLE001
+                pass
+        if not args.auto:
+            print("  تا وقتی این پنجره باز است اپ کار می‌کند (Ctrl+C برای بستن).")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                print("  بسته شد.")
+                return 0
 
     result = studio.walk(limit=args.limit, progress=progress)
     if not result.get("ok"):
@@ -402,7 +435,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
           f"· میانگین: {result['avg_bp']:+.2f}bp")
     trades = studio.trade_stats()
     print(f"  معاملات کاغذی: {trades['closed']} بسته · {trades['open']} باز · برد {trades['win_pct']}% · "
-          f"خالص {trades['net_bp']:+.1f}bp")
+          f"خالص {trades['net_bp']:+.1f}bp · هزینهٔ پرداختی {trades['cost_paid_bp']:.0f}bp")
     if result.get("failures"):
         print(f"  خطای مدل: {result['failures']} (آخرین: {result['last_error']})")
     print(f"  وضعیت: {out_dir / 'state.json'}")

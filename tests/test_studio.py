@@ -106,7 +106,7 @@ def test_momentum_rule_speaks_persian(tmp_path) -> None:
 
 def test_step_cursor_moves_and_paper_trades_open_and_close(tmp_path) -> None:
     logs = make_logs(tmp_path)
-    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, step_min=1, horizon=3)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, step_min=1, horizon=3, flat_bp=0.0)
     first = studio.step()
     assert first is not None and first["direction"] in ("up", "down", "flat")
     start = studio._cursor
@@ -159,3 +159,14 @@ def test_studio_finds_the_logs_folder_beside_the_repo(tmp_path) -> None:
     studio = Studio(tmp_path, "XAUUSD_i", tmp_path / "st", chat=None)
     assert studio.ensure_data() is True
     assert len(studio.candles) > 100
+
+
+def test_the_rule_stays_flat_inside_the_no_trade_band(tmp_path) -> None:
+    """هر دقیقه معامله باز نکن: حرکت زیر آستانه = خنثی، بدون معامله."""
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, step_min=1, horizon=3,
+                    flat_bp=1e6)
+    for _ in range(8):
+        studio.step()
+    assert all(p.direction == "flat" for p in studio.preds)
+    assert studio.trade_stats()["trades"] == 0

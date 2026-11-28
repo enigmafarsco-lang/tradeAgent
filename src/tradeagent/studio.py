@@ -111,11 +111,17 @@ def _parse_reply(text: str, horizon: int) -> dict[str, Any]:
     }
 
 
-def momentum_rule(candles: Sequence[Candle], i: int) -> dict[str, Any]:
-    """قاعدهٔ سادهٔ ۵ دقیقه — هم پیش‌فرض بدون مدل، هم خط مبنا."""
+def momentum_rule(candles: Sequence[Candle], i: int, flat_bp: float = 0.0) -> dict[str, Any]:
+    """قاعدهٔ سادهٔ ۵ دقیقه — پیش‌فرض بدون مدل، و خط مبنا.
+
+    اگر حرکت از آستانهٔ خنثی کمتر بود `flat` می‌گوید: هر دقیقه معامله باز نکن.
+    """
     ref = candles[max(0, i - 5)].close
     move = ((candles[i].close / ref) - 1.0) * 1e4 if ref else 0.0
-    direction = "up" if move > 0 else "down" if move < 0 else "flat"
+    if abs(move) <= flat_bp:
+        return {"direction": "flat", "strength": abs(move) / max(flat_bp, 1e-9), "confidence": 0.3,
+                "reason": f"حرکت ۵ کندل اخیر فقط {move:+.1f}bp است؛ زیر آستانهٔ {flat_bp:g}bp، خنثی."}
+    direction = "up" if move > 0 else "down"
     return {"direction": direction, "strength": min(1.0, abs(move) / 10.0), "confidence": 0.5,
             "reason": f"تغییر ۵ کندل اخیر {move:+.1f}bp است، پس {direction}."}
 
@@ -186,7 +192,7 @@ class Studio:
             out["source"] = "cache"
             return out
         if self.chat is None:
-            out = momentum_rule(self.candles, i)
+            out = momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
             return out
         prompt = PREDICT_PROMPT.format(
@@ -207,7 +213,7 @@ class Studio:
             self.failures += 1
             self.last_error = f"{type(exc).__name__}: {exc}"[:200]
             LOG.warning("پیش‌بینی با مدل نشد (%s)؛ قاعدهٔ تکانه جایش را می‌گیرد", self.last_error)
-            out = momentum_rule(self.candles, i)
+            out = momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
             return out
 
@@ -312,6 +318,8 @@ class Studio:
             "win_pct": round(100.0 * wins / len(closed), 1) if closed else 0.0,
             "net_bp": round(net, 2),
             "avg_bp": round(net / len(closed), 2) if closed else 0.0,
+            "cost_paid_bp": round(len(closed) * self.cost_bp, 1),
+            "gross_bp": round(net + len(closed) * self.cost_bp, 2),
         }
 
     # -- حرکت ------------------------------------------------------------
