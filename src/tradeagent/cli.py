@@ -12,8 +12,10 @@ from typing import Sequence
 from . import __version__
 from .config import DEFAULT_CONFIG, REPO_ROOT, Config
 from .doctor import render_checks, run_doctor, summary
+from .llm import LLMAdvisor
 from .paper import Store
 from .policy import describe
+from .publish import Publisher
 from .publish import Publisher
 from .util import ensure_dir, setup_logging, utc_iso, utc_stamp
 
@@ -55,6 +57,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="وضعیت فعلی از ژورنال")
     p_report = sub.add_parser("report", help="مسیر آخرین گزارش")
     p_report.add_argument("--cat", action="store_true", help="چاپ متن گزارش")
+
+    p_ticks = sub.add_parser("ticks", help="خلاصهٔ تیک‌های ذخیره‌شده (چند روز، چند تیک، بازهٔ قیمت)")
+    p_ticks.add_argument("--symbol", default=None, help="نماد (پیش‌فرض: data.symbols)")
+    p_ticks.add_argument("--json", action="store_true", help="خروجی JSON")
+
+    p_replay = sub.add_parser("replay", help="بازپخش تیک‌ها: هر N ثانیه پیش‌بینی مدل + امتیاز + گزارش گرافیکی")
+    p_replay.add_argument("--symbol", default=None, help="نماد (پیش‌فرض: data.symbols)")
+    p_replay.add_argument("--step", type=int, default=300, help="هر چند ثانیه یک پیش‌بینی (پیش‌فرض ۳۰۰)")
+    p_replay.add_argument("--horizon", type=int, default=300, help="افق پیش‌بینی به ثانیه (پیش‌فرض ۳۰۰)")
+    p_replay.add_argument("--warmup", type=int, default=900, help="چند ثانیه داده قبل از اولین پیش‌بینی")
+    p_replay.add_argument("--cost-bp", type=float, default=1.0, help="هزینهٔ رفت‌وبرگشت در bp")
+    p_replay.add_argument("--limit", type=int, default=0, help="حداکثر تعداد پیش‌بینی (۰=همه)")
+    p_replay.add_argument("--out", default="var/backtest", help="پوشهٔ خروجی گزارش")
+    p_replay.add_argument("--publish", action="store_true", help="گزارش را روی شاخهٔ reports پوش کن")
+    p_replay.add_argument("--fake", choices=["up", "down", "flat", "random"], default=None, help="پیش‌بینی‌کنندهٔ ساختگی (تست بدون مدل)")
 
     p_pub = sub.add_parser("publish-test", help="تست کامیت/پوش گزارش‌ها")
     p_pub.add_argument("--write", action="store_true", help="کامیت واقعی (پیش‌فرض: فقط بررسی کلون)")
@@ -150,6 +167,78 @@ def cmd_loop(cfg: Config, args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     return runner.run_forever(args.interval)
+
+
+def cmd_ticks(cfg: Config, args: argparse.Namespace) -> int:
+    from .loop import resolve_harvester_dir
+    from .replay import summarize
+
+    root = resolve_harvester_dir(cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"))
+    symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+    info = summarize(root, symbol)
+    if args.json:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return 0
+    print(f"  نماد: {info['symbol']} · {info['files']} فایل · {info['ticks']:,} تیک")
+    print(f"  بازه: {info['from']} → {info['to']}")
+    print(f"  قیمت: {info['low']} … {info['high']}")
+    for day in info["days"]:
+        print(f"    {day['file']}: {day['ticks']:,} تیک · {day['low']} … {day['high']}")
+    return 0
+
+
+def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
+    import random
+
+    from .loop import resolve_harvester_dir
+    from .replay import Replay, model_predict
+
+    root = resolve_harvester_dir(cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"))
+    symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+
+    if args.fake:
+        def predictor(bars, horizon):  # noqa: ANN001, ANN202
+            direction = args.fake if args.fake != "random" else random.choice(["up", "down", "flat"])
+            return {"direction": direction, "phase": "steady", "strength": 0.5,
+                    "confidence": 0.5, "horizon_s": horizon, "expected_bp": 0.0,
+                    "analysis": f"پیش‌بینی ساختگی: {direction}"}
+    else:
+        advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
+
+        def predictor(bars, horizon):  # noqa: ANN001, ANN202
+            return model_predict(advisor.chat, bars, horizon)
+
+    run = Replay(
+        root=root,
+        symbol=symbol,
+        predictor=predictor,
+        step_s=args.step,
+        horizon_s=args.horizon,
+        warmup_s=args.warmup,
+        cost_bp=args.cost_bp,
+        out_dir=cfg.path(args.out, args.out),
+    )
+    stats = run.run(limit_steps=args.limit)
+    if not stats.get("ok"):
+        print("  " + str(stats.get("error")))
+        return 1
+    print(f"  پیش‌بینی: {stats['steps']} · سنجیده: {stats['scored']} · درست: {stats['hit_pct']}% "
+          f"· میانگین خالص: {stats['avg_net_bp']}bp · {stats['elapsed_s']}s")
+    for direction, bucket in sorted((stats.get("by_direction") or {}).items()):
+        print(f"    {direction}: n={bucket['n']} · درست {bucket['hit_pct']}% · میانگین {bucket['avg_bp']}bp")
+    out = cfg.path(args.out, args.out)
+    print(f"  گزارش: {out / 'index.html'}")
+    if args.publish and not args.fake:
+        pub = Publisher(cfg, cfg.root).publish(
+            {
+                "backtest/index.html": (out / "index.html").read_text(encoding="utf-8"),
+                "backtest/predictions.jsonl": (out / "predictions.jsonl").read_text(encoding="utf-8"),
+                "backtest/stats.json": (out / "stats.json").read_text(encoding="utf-8"),
+            },
+            "replay: پیش‌بینی ۵ دقیقه‌ای مدل روی تیک‌های واقعی",
+        )
+        print(f"  پوش: {pub.get('status') or pub.get('error') or pub}")
+    return 0
 
 
 def cmd_demo(cfg: Config, args: argparse.Namespace) -> int:
@@ -271,6 +360,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": cmd_status,
         "report": cmd_report,
         "publish-test": cmd_publish_test,
+        "ticks": cmd_ticks,
+        "replay": cmd_replay,
     }
     handler = handlers.get(args.cmd)
     if handler is None:  # pragma: no cover
