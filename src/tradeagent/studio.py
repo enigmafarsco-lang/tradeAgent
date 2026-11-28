@@ -230,6 +230,8 @@ class Studio:
         self.preds: list[Prediction] = []
         self.failures = 0
         self.last_error = ""
+        self.model_down = False        # مدارشکن: بعد از چند خطای پشت‌سرهم، مدل را صدا نزن
+        self._fail_streak = 0
         self._saved = 0
         self._cursor: int | None = None
         self._full_write = False
@@ -275,7 +277,7 @@ class Studio:
             out = dict(self.cache[key])
             out["source"] = "cache"
             return out
-        if self.chat is None:
+        if self.chat is None or self.model_down:
             rule = getattr(self, "rule", None)
             out = rule(i) if rule else momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
@@ -293,10 +295,16 @@ class Studio:
                 raise ValueError("پاسخ مدل JSON معتبر نبود")
             parsed["source"] = "ollama"
             self.cache[key] = {k: v for k, v in parsed.items() if k != "source"}
+            self._fail_streak = 0
             return parsed
         except Exception as exc:  # noqa: BLE001 - مدل ممکن است قطع باشد
             self.failures += 1
+            self._fail_streak += 1
             self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+            if self._fail_streak >= 3 and not self.model_down:
+                self.model_down = True
+                LOG.warning("مدل سه بار پشت‌سرهم خطا داد؛ تا پایان این اجرا کنار گذاشته شد. "
+                            "برای عیب‌یابی: ./scripts/studio.sh --doctor")
             LOG.warning("پیش‌بینی با مدل نشد (%s)؛ قاعدهٔ تکانه جایش را می‌گیرد", self.last_error)
             out = momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
@@ -540,6 +548,7 @@ class Studio:
                 if directional else 0.0,
                 "avg_actual_bp": round(sum(p.actual_bp or 0 for p in scored) / len(scored), 2) if scored else 0.0,
                 "model_errors": self.failures,
+            "model_down": self.model_down,
             "frozen_skipped": self.frozen_skipped,
             "avg_abs_move_bp": round(sum(abs(p.actual_bp or 0) for p in scored) / len(scored), 2)
             if scored else 0.0,
@@ -730,6 +739,8 @@ th{background:#16233c;color:var(--muted)}
 </style></head><body>
 <h1>استودیو ایجنت — <span id="sym">SYMBOL</span> <span class="muted" id="prog"></span></h1>
 <div class="muted" id="upd">…</div>
+<div id="alert" style="display:none;margin:8px 0;padding:9px 12px;border-radius:10px;
+     background:#3b1d1d;border:1px solid #7f1d1d;color:#fecaca;font-size:13px"></div>
 <div style="margin:10px 0">
   <button class="ghost" onclick="api('reset')">⏮ از اول</button>
   <button class="ghost" onclick="api('prev')">◀ عقب</button>
@@ -886,7 +897,8 @@ function render(force){
     ['خالص تحلیل',((s.net_bp||0)>=0?'+':'')+(s.net_bp||0)+'bp'],
     ['دقت جهت‌دار',(s.dir_hit_pct||0)+'%'],['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
     ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],
-    ['هزینه',(ts.cost_paid_bp||0)+'bp'],['باز',ts.open||0]];
+    ['هزینه',(ts.cost_paid_bp||0)+'bp'],['باز',ts.open||0],
+    ['مدل', s.model_down?'قطع':'آماده']];
   const lp=(state.preds||[])[(state.preds||[]).length-1];
   const what=document.getElementById('what');
   if(what){
@@ -903,6 +915,14 @@ function render(force){
     } else {
       what.textContent='هنوز تصمیمی گرفته نشده؛ «قدم بعد» را بزن.';
     }
+  }
+  const alert=document.getElementById('alert');
+  if(alert){
+    if(s.model_down || (s.failures||0)>0){
+      alert.style.display='block';
+      alert.innerHTML='⚠️ مدل جواب نمی‌دهد ('+(s.failures||0)+' خطا'+(s.last_error?': '+s.last_error.slice(0,80):'')+
+        ') — الان با قاعدهٔ تکانه جلو می‌رود. عیب‌یابی: <code>./scripts/studio.sh --doctor</code>';
+    } else { alert.style.display='none'; }
   }
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   const rows=(state.preds||[]).slice(-20).reverse().map(p=>{

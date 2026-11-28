@@ -99,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="کمترین اطمینان برای باز کردن معاملهٔ کاغذی")
     p_studio.add_argument("--no-skip-frozen", action="store_true",
                           help="دقیقه‌های مرده (بازار بسته/قیمت ثابت) را هم حساب کن")
+    p_studio.add_argument("--doctor", action="store_true",
+                          help="فقط مدل را عیب‌یابی کن: چرا ollama جواب نمی‌دهد")
+    p_studio.add_argument("--model", default=None, help="نام مدل ollama (مثلاً qwen2.5:1.5b-instruct)")
     p_studio.add_argument("--scan", action="store_true",
                           help="فقط بگو با این هزینه کدام افق جای سود دارد (بدون تصمیم‌گیری)")
     p_studio.add_argument("--rule", choices=["momentum", "trend"], default="momentum",
@@ -373,6 +376,17 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     out_dir = cfg.path(args.out, args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if getattr(args, "doctor", False):
+        from .llm import LLMAdvisor
+        from .llmdiag import diagnose, format_report, verdict
+
+        advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
+        model = args.model or advisor.ollama_model
+        print(f"═══ عیب‌یابی مدل: {model} روی {advisor.ollama_url} ═══")
+        probes = diagnose(advisor.ollama_url, model)
+        print(format_report(probes, verdict(probes, model)))
+        return 0
+
     print(f"═══ استودیو: {symbol} · گام {args.step_min} دقیقه · افق {args.horizon} کندل ═══")
     found = find_tick_files(root, symbol)
     logs = [d for d in discover_tick_dirs(symbol, [root] if args.data else []) if str(d) != str(root)]
@@ -408,6 +422,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
 
     chat = None
     if not args.no_llm:
+        if args.model:
+            cfg.set("llm.ollama_model", args.model)
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = advisor.preflight()
         if ok:
@@ -418,6 +434,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
         else:
             print(f"  مدل جواب نداد: {why[:120]}")
             print("  ─ با قاعدهٔ تکانه جلو می‌رود و در جدول، منبع هر تصمیم «rule» نوشته می‌شود.")
+            print("  ─ برای فهمیدن علت: ./scripts/studio.sh --doctor")
+            print("  ─ یا مدل کوچک‌تر: ./scripts/studio.sh --serve --model qwen2.5:1.5b-instruct")
 
     studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min,
                     horizon=args.horizon, flat_bp=args.flat_bp, min_conf=args.min_conf,
