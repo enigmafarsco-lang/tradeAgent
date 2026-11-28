@@ -103,7 +103,7 @@ def m1_candles_from_ticks(ticks: Iterable[tuple[int, float, float, float]]) -> l
 
 
 def find_tick_files(root: Path, symbol: str) -> list[Path]:
-    """فایل‌های تیک را پیدا می‌کند: یا <root>/ticks/<SYMBOL>/*.csv یا خودِ پوشهٔ نماد."""
+    """فایل‌های تیک را پیدا می‌کند: csv داخل harvester، یا jsonl لاگ ربات (s1_ticks_...)."""
     from .replay import tick_files
 
     root = Path(root).expanduser()
@@ -112,31 +112,235 @@ def find_tick_files(root: Path, symbol: str) -> list[Path]:
         files = sorted((root / symbol).glob("*.csv"))
     if not files:
         files = sorted(root.glob("*.csv"))
+    if files:
+        return files
+    return [p for p in sorted(root.glob("*.jsonl")) if symbol in p.name] or sorted(root.glob("*.jsonl"))
+
+
+SEARCH_HINTS = (
+    "~/trade-mc/logs",
+    "~/trade-mc",
+    "~/Documents/GitHub/trade-mc/logs",
+    "~/Documents/GitHub/trade-mc",
+    "~/Documents/GitHub",
+    "~/logs",
+)
+
+
+def discover_tick_dirs(symbol: str, extra: Sequence[Path] = ()) -> list[Path]:
+    """پوشه‌هایی که s1_ticks_<SYMBOL>_*.jsonl دارند (دادهٔ آفلاین ربات trade-mc)."""
+    import os
+
+    roots: list[Path] = []
+    env = os.environ.get("TRADEAGENT_TICK_LOGS")
+    if env:
+        roots.append(Path(env).expanduser())
+    roots.append(Path.cwd())
+    roots.extend(Path(h).expanduser() for h in SEARCH_HINTS)
+    roots.extend(Path(x).expanduser() for x in extra)
+
+    found: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        dirs: list[Path] = [root]
+        for pattern in ("*/logs", "*/", "logs"):
+            try:
+                dirs.extend(p for p in root.glob(pattern) if p.is_dir())
+            except OSError:
+                continue
+        for cand in dirs[:80]:
+            key = str(cand)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if any(cand.glob(f"s1_ticks_{symbol}*.jsonl")) or any(cand.glob("s1_ticks_*.jsonl")):
+                    found.append(cand)
+            except OSError:
+                continue
+    found.sort(key=lambda d: -len(list(d.glob(f"s1_ticks_{symbol}*.jsonl"))))
+    return found
+
+
+def probe_tick_file(path: Path) -> dict[str, Any]:
+    """نوع و کلیدهای فایل تیک را برمی‌گرداند (برای پیام روشن وقتی داده نمی‌خواند)."""
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline().strip()
+            if not first:
+                first = fh.readline().strip()
+    except OSError as exc:
+        return {"path": str(path), "kind": "unreadable", "error": str(exc)}
+    if first.startswith("{"):
+        try:
+            obj = json.loads(first)
+        except ValueError:
+            return {"path": str(path), "kind": "jsonl?", "keys": []}
+        return {"path": str(path), "kind": "jsonl", "keys": list(obj)[:14]}
+    return {"path": str(path), "kind": "csv", "keys": first.split(";")[:7]}
+
+
+def _tick_from_json(obj: dict[str, Any]) -> tuple[int, float, float, float] | None:
+    """یک خط jsonl → (time_msc, bid, ask, volume)؛ کلیدهای رایج هر رباتی را می‌پذیرد."""
+    lowered = {str(k).lower(): v for k, v in obj.items()}
+
+    def num(*keys: str) -> float | None:
+        for k in keys:
+            v = lowered.get(k)
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v)
+                except ValueError:
+                    continue
+        return None
+
+    t = num("time_msc", "timemsc", "msc", "ts_ms", "epoch_ms", "ts", "timestamp", "time", "t")
+    if t is None:
+        return None
+    if t < 1e11:            # ثانیه بود
+        t *= 1000.0
+    bid = num("bid", "bid_price", "b")
+    ask = num("ask", "ask_price", "a")
+    mid = num("mid", "price", "last", "close", "c")
+    if bid is None and ask is None:
+        if mid is None:
+            return None
+        bid = ask = mid
+    bid = bid if bid is not None else (ask or 0.0)
+    ask = ask if ask is not None else bid
+    volume = num("volume", "last_volume", "vol", "size", "qty") or 1.0
+    return int(t), float(bid), float(ask), float(volume)
+
+
+def iter_tick_file(path: Path) -> Iterable[tuple[int, float, float, float]]:
+    """فایل تیک را خط‌به‌خط می‌خواند؛ هم csv (؛) و هم jsonl."""
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh):
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("{"):
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    tick = _tick_from_json(obj)
+                    if tick:
+                        yield tick
+                    continue
+                if lineno == 0 and not line[:1].isdigit():
+                    continue                      # سرستون
+                parts = line.split(";")
+                if len(parts) < 4:
+                    parts = line.split(",")
+                if len(parts) < 4:
+                    continue
+                try:
+                    ms = int(float(parts[0]))
+                    if ms < 10 ** 11:
+                        ms *= 1000
+                    bid = float(parts[2])
+                    ask = float(parts[3])
+                    volume = float(parts[5]) if len(parts) > 5 and parts[5] else 1.0
+                except ValueError:
+                    continue
+                yield ms, bid, ask, volume
+    except OSError:
+        return
+
+
+def collect_tick_files(root: Path, symbol: str, extra_dirs: Sequence[Path] = ()) -> list[Path]:
+    """همهٔ فایل‌های تیک از harvester و از logs ربات، بدون تکرار."""
+    files: list[Path] = []
+    seen: set[str] = set()
+    for directory in [Path(root), *[Path(d) for d in extra_dirs]]:
+        for f in find_tick_files(directory, symbol):
+            key = str(f.resolve())
+            if key in seen or f.stat().st_size == 0:
+                continue
+            seen.add(key)
+            files.append(f)
     return files
 
 
-def load_candles(root: Path, symbol: str) -> list[Candle]:
-    """همهٔ فایل‌های تیک نماد را به کندل M1 تبدیل می‌کند (فایل خالی نادیده گرفته می‌شود)."""
-    ticks: list[tuple[int, float, float, float]] = []
-    for path in find_tick_files(root, symbol):
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for line in lines[1:]:
-            parts = line.split(";")
-            if len(parts) < 4:
-                continue
+def load_candles(
+    root: Path,
+    symbol: str,
+    cache_dir: Path | None = None,
+    stats: dict[str, Any] | None = None,
+    extra_dirs: Sequence[Path] = (),
+) -> list[Candle]:
+    """فایل‌های تیک نماد → کندل M1 (csv harvester یا jsonl لاگ ربات؛ تکراری‌ها یک‌بار).
+
+    نتیجه در cache_dir کش می‌شود تا اجرای دوم روی ۷۵ مگابایت تیک، ثانیه‌ای باشد.
+    """
+    import gzip
+
+    files = collect_tick_files(root, symbol, extra_dirs)
+    if not files:
+        return []
+    stamp = "|".join(f"{f.name}:{f.stat().st_size}:{int(f.stat().st_mtime)}" for f in files if f.exists())
+    import hashlib
+
+    key = hashlib.sha1((symbol + "|" + stamp).encode("utf-8")).hexdigest()
+    if cache_dir:
+        cached = Path(cache_dir) / f"candles_{symbol}_{key}.json.gz"
+        if cached.exists():
             try:
-                ms = int(parts[0])
-                bid = float(parts[2])
-                ask = float(parts[3])
-                volume = float(parts[5]) if len(parts) > 5 and parts[5] else 1.0
-            except ValueError:
+                with gzip.open(cached, "rt", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                if stats is not None and isinstance(payload.get("stats"), dict):
+                    stats.update(payload["stats"])
+                return [Candle(**item) for item in payload["candles"]]
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
+
+    seen: set[tuple[int, float]] = set()
+    ticks: list[tuple[int, float, float, float]] = []
+    per_file: dict[str, int] = {}
+    for path in files:
+        n = 0
+        dup = 0
+        for ms, bid, ask, volume in iter_tick_file(path):
+            stamp_key = (ms, round(bid, 3))
+            if stamp_key in seen:            # فایل‌های هم‌پوشان
+                dup += 1
+                if n < 20_000 and dup > 0.98 * (n + dup) and dup > 5_000:
+                    LOG.info("رد کردن بقیهٔ %s (تکراری)", path.name)
+                    break
                 continue
+            seen.add(stamp_key)
             ticks.append((ms, bid, ask, volume))
+            n += 1
+        per_file[path.name] = n
     ticks.sort(key=lambda x: x[0])
-    return m1_candles_from_ticks(ticks)
+    candles = m1_candles_from_ticks(ticks)
+    info = {
+        "root": str(root),
+        "files": per_file,
+        "ticks": len(ticks),
+        "kinds": sorted({probe_tick_file(f)["kind"] for f in files}),
+        "first_ms": ticks[0][0] if ticks else 0,
+        "last_ms": ticks[-1][0] if ticks else 0,
+    }
+    if stats is not None:
+        stats.update(info)
+
+    if cache_dir and candles:
+        try:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            with gzip.open(Path(cache_dir) / f"candles_{symbol}_{key}.json.gz", "wt", encoding="utf-8") as fh:
+                json.dump({"candles": [asdict(c) for c in candles], "stats": info}, fh)
+        except OSError:
+            pass
+    return candles
 
 
 def read_tick_minutes(root: Path, symbol: str) -> dict[str, int]:
@@ -621,6 +825,35 @@ tr.best td{{background:#132a1f}}
 # --------------------------------------------------------------------------
 # اجرا
 # --------------------------------------------------------------------------
+def _span(stats: dict[str, Any]) -> str:
+    first = stats.get("first_ms") or 0
+    last = stats.get("last_ms") or 0
+    if not first:
+        return ""
+    fmt = "%Y-%m-%d %H:%M"
+    return (time.strftime(fmt, time.gmtime(first / 1000)) + " → "
+            + time.strftime(fmt, time.gmtime(last / 1000)) + " UTC")
+
+
+def _verdict(data: dict[str, Any]) -> str:
+    """یک خط ساده: مدل از قاعدهٔ ساده بهتر است یا نه."""
+    rows = {r["name"]: r for r in data.get("summary", [])}
+    model = rows.get("رگرسیون لجستیک")
+    rule = rows.get("قاعدهٔ تکانه")
+    best = data["summary"][0] if data.get("summary") else None
+    if not model or not rule:
+        return ""
+    diff = model["net_bp"] - rule["net_bp"]
+    if model["avg_bp"] <= 0:
+        head = "مدل روی این داده سود ندارد (میانگین bp منفی یا صفر)"
+    elif diff > 0:
+        head = f"مدل از قاعدهٔ تکانه بهتر است ({diff:+.1f} bp)"
+    else:
+        head = f"قاعدهٔ تکانه از مدل بهتر است ({diff:+.1f} bp)"
+    return (f"{head} · دقت مدل {model['accuracy'] * 100:.1f}% در برابر {rule['accuracy'] * 100:.1f}% · "
+            f"بهترین: {best['name'] if best else '-'}")
+
+
 def _own_label(candle: Candle, flat_bp: float) -> str:
     """رنگ کندل برای نمودار: بدنهٔ خودش، با همان آستانهٔ خنثی."""
     move = candle.body_bp
@@ -638,9 +871,18 @@ def run(
     out_dir: Path | None = None,
     serve: bool = False,
     port: int = 8610,
+    data_dirs: Sequence[Path] = (),
 ) -> dict[str, Any]:
     started = time.time()
-    candles = load_candles(root, symbol)
+    out = Path(out_dir) if out_dir else Path("var/lab")
+    stats: dict[str, Any] = {}
+    root = Path(root).expanduser()
+    logs_dirs = [d for d in discover_tick_dirs(symbol, data_dirs) if str(d) != str(root)][:4]
+    files = collect_tick_files(root, symbol, logs_dirs)
+    if not files:
+        tried = [str(root)] + [str(d) for d in logs_dirs[:5]]
+        return {"ok": False, "error": "فایل تیک پیدا نشد. مسیرهای جست‌وجوشده: " + " · ".join(tried)}
+    candles = load_candles(root, symbol, cache_dir=out / "cache", stats=stats, extra_dirs=logs_dirs)
     if len(candles) < 120:
         return {"ok": False, "error": f"کندل کافی نیست: {len(candles)} (حداقل ۱۲۰ لازم است)"}
     samples = build_samples(candles, horizon=horizon, flat_bp=flat_bp)
@@ -669,14 +911,19 @@ def run(
         "candles_n": len(candles),
         "candles": [{"t": c.t, "close": round(c.close, 3), "label": _own_label(c, flat_bp)}
                     for c in candles],
-        "source": str(Path(root) / symbol),
+        "source": stats.get("root", str(root)),
+        "files": stats.get("files", {}),
+        "sources": [stats.get("root", str(root))] + [str(d) for d in logs_dirs],
+        "ticks": stats.get("ticks", 0),
+        "kinds": stats.get("kinds", []),
+        "span": _span(stats),
+        "verdict": _verdict(data),
         "seconds": round(time.time() - started, 1),
         "last": last,
         "subtitle": f"{symbol} · {len(candles)} کندل M1 · هدف: جهت {horizon} کندل بعد",
     })
     html_text = render_html(data, f"آزمایشگاه مدل — {symbol}")
 
-    out = Path(out_dir) if out_dir else Path("var/lab")
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(html_text, encoding="utf-8")
     (out / "results.json").write_text(json.dumps({k: v for k, v in data.items() if k != "candles"},

@@ -82,7 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_lab.add_argument("--folds", type=int, default=5)
     p_lab.add_argument("--cost-bp", type=float, default=1.0)
     p_lab.add_argument("--epochs", type=int, default=250)
-    p_lab.add_argument("--data", default=None, help="پوشهٔ داده (پیش‌فرض: مسیر harvester)")
+    p_lab.add_argument("--data", default=None, help="پوشهٔ داده (harvester یا logs با s1_ticks_*.jsonl)")
+    p_lab.add_argument("--list", action="store_true", help="فقط نشان بده چه داده‌ای هست و از چه نمادی")
     p_lab.add_argument("--out", default="var/lab")
     p_lab.add_argument("--serve", action="store_true", help="بعد از ساخت، داشبورد را روی پورت بالا بیاور")
     p_lab.add_argument("--port", type=int, default=8610)
@@ -202,31 +203,66 @@ def cmd_ticks(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_lab(cfg: Any, args: Any) -> int:
-    from .lab import run as run_lab
-    from .loop import resolve_harvester_dir
+    from .lab import discover_tick_dirs, find_tick_files, probe_tick_file, run as run_lab
 
     symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+
+    if getattr(args, "list", False):
+        dirs = discover_tick_dirs(symbol, [Path(args.data).expanduser()] if args.data else [])
+        if not dirs:
+            print("  پوشه‌ای با فایل‌های s1_ticks_*.jsonl پیدا نشد.")
+            print("  با --data مسیر را بده، مثلاً: ./scripts/lab.sh --list --data ~/trade-mc/logs")
+            return 1
+        for d in dirs[:6]:
+            files = sorted(d.glob("s1_ticks_*.jsonl"))
+            symbols = sorted({f.name.split("_ticks_")[1].rsplit("_", 1)[0] for f in files if "_ticks_" in f.name})
+            print(f"  {d}")
+            print(f"    {len(files)} فایل · نمادها: {', '.join(symbols[:12])}")
+            for f in files[:2]:
+                print(f"    نمونه: {f.name} ({f.stat().st_size / 1e6:.1f}MB) کلیدها: {probe_tick_file(f).get('keys')}")
+        return 0
+
     if args.data:
         root = Path(args.data).expanduser()
     else:
-        root = resolve_harvester_dir(cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"))
+        root = Path("").resolve()      # جست‌وجو در کنار مخزن + مسیرهای رایج (trade-mc/logs)
+    found = find_tick_files(root, symbol)
+    logs = [d for d in discover_tick_dirs(symbol, [root] if args.data else []) if str(d) != str(root)]
     print(f"═══ آزمایشگاه مدل: {symbol} · افق {args.horizon} کندل M1 ═══")
-    print(f"  تیک‌ها: {root / symbol}")
+    if found:
+        first = probe_tick_file(found[0])
+        print(f"  داده: {len(found)} فایل {first.get('kind')} در {root}")
+    if logs:
+        sample = next(iter(sorted(logs[0].glob(f"s1_ticks_{symbol}*.jsonl"))), None) or \
+            next(iter(sorted(logs[0].glob("s1_ticks_*.jsonl"))), None)
+        keys = probe_tick_file(sample).get("keys") if sample else []
+        print(f"  لاگ ربات: {logs[0]} ({len(list(logs[0].glob('s1_ticks_*.jsonl')))} فایل) کلیدها: {keys}")
+    if not found and not logs:
+        print("  داده‌ای پیدا نشد؛ با --data مسیر پوشهٔ تیک‌ها یا logs را بده.")
+
     data = run_lab(root, symbol, horizon=args.horizon, flat_bp=args.flat_bp, n_folds=args.folds,
                    cost_bp=args.cost_bp, epochs=args.epochs, out_dir=cfg.path(args.out, args.out),
                    serve=False, port=args.port)
     if not data.get("ok"):
         print("  " + str(data.get("error")))
         return 1
-    print(f"  کندل M1: {data['candles_n']} · نمونه: {data['samples']} · فولد: {data['folds_n']}")
+
+    print(f"  منبع: {data.get('source')}")
+    print(f"  تیک: {data.get('ticks'):,} · بازه: {data.get('span')} · کندل M1: {data['candles_n']}")
+    print(f"  نمونهٔ آموزش/آزمون: {data['samples']} در {data['folds_n']} فولد (افق {data['horizon']} کندل)")
+    print("  ─" * 24)
     for row in data["summary"]:
-        print(f"    {row['name']:<18} دقت {row['accuracy'] * 100:5.1f}%  "
-              f"معامله {row['bets']:4d}  برد {row['win_pct']:5.1f}%  خالص {row['net_bp']:+8.1f}bp  "
-              f"میانگین {row['avg_bp']:+.2f}bp")
+        print(f"   {row['name']:<16} دقت {row['accuracy'] * 100:5.1f}%  "
+              f"معامله {row['bets']:4d}  برد {row['win_pct']:5.1f}%  "
+              f"خالص {row['net_bp']:+8.1f}bp  میانگین {row['avg_bp']:+.2f}bp")
+    if data.get("verdict"):
+        print("  ─" * 24)
+        print(f"  نتیجه: {data['verdict']}")
     if data.get("importance"):
         top = ", ".join(i["feature"] for i in data["importance"][:6])
         print(f"  مهم‌ترین ویژگی‌ها: {top}")
     print(f"  گزارش: {data['html_path']}")
+    print(f"  داشبورد: {'http://127.0.0.1:%d' % args.port if args.serve else 'با --serve بالا می‌آید'}")
     if args.serve:
         from .lab import serve_lab
 

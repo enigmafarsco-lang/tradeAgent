@@ -106,3 +106,62 @@ def test_lab_end_to_end_writes_the_dashboard(tmp_path) -> None:
     assert "مقایسهٔ مدل‌ها" in html_text and "<svg" in html_text
     saved = json.loads((tmp_path / "lab" / "results.json").read_text(encoding="utf-8"))
     assert saved["symbol"] == "XAUUSD_i" and saved["horizon"] == 3
+
+
+# --------------------------------------------------------------------------
+# دادهٔ آفلاین ربات: s1_ticks_<SYMBOL>_<date>.jsonl
+# --------------------------------------------------------------------------
+def make_jsonl_logs(tmp_path: Path, symbol: str = "XAUUSD_i", minutes: int = 200) -> Path:
+    d = tmp_path / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    base = 1_760_000_000_000
+    price = 3620.0
+    lines = []
+    for sec in range(minutes * 60):
+        price += math.sin(sec / 400.0) * 0.02 + random.Random(sec).gauss(0, 0.05)
+        for k in range(2):
+            q = price + random.Random(sec * 7 + k).gauss(0, 0.01)
+            lines.append(json.dumps({"time_msc": base + sec * 1000 + k * 500,
+                                     "bid": round(q - 0.12, 2), "ask": round(q + 0.12, 2),
+                                     "volume": 1, "flags": 4}))
+    (d / f"s1_ticks_{symbol}_20261127.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # همان بازه با فرمت دیگر (ثانیه + price) — باید تکراری‌ها یکی شوند
+    alt = [json.dumps({"ts": (base + sec * 1000) / 1000, "price": 3620.0, "vol": 1})
+           for sec in range(minutes * 60)]
+    (d / f"s1_ticks_{symbol}_20261127T120000Z.jsonl").write_text("\n".join(alt) + "\n", encoding="utf-8")
+    (d / f"s1_ticks_{symbol}_20261128.jsonl").write_text("", encoding="utf-8")
+    return d
+
+
+def test_jsonl_logs_from_another_robot_are_read(tmp_path) -> None:
+    from tradeagent.lab import load_candles, probe_tick_file
+
+    d = make_jsonl_logs(tmp_path)
+    info = probe_tick_file(next(d.glob("s1_ticks_XAUUSD_i_20261127.jsonl")))
+    assert info["kind"] == "jsonl" and "time_msc" in info["keys"]
+
+    stats: dict = {}
+    candles = load_candles(d, "XAUUSD_i", stats=stats)
+    assert len(candles) >= 150
+    assert stats["ticks"] > 10_000
+    assert "jsonl" in stats["kinds"]
+    assert candles[0].close > 3000          # قیمت واقعی خوانده شد، نه صفر
+
+
+def test_jsonl_cache_is_reused(tmp_path) -> None:
+    from tradeagent.lab import load_candles
+
+    d = make_jsonl_logs(tmp_path)
+    cache = tmp_path / "cache"
+    first = load_candles(d, "XAUUSD_i", cache_dir=cache)
+    assert list(cache.glob("candles_*.json.gz"))
+    second = load_candles(d, "XAUUSD_i", cache_dir=cache)
+    assert len(first) == len(second) and first[0].close == second[0].close
+
+
+def test_lists_which_symbols_the_logs_contain(tmp_path) -> None:
+    from tradeagent.lab import discover_tick_dirs
+
+    make_jsonl_logs(tmp_path / "a")
+    dirs = discover_tick_dirs("XAUUSD_i", [tmp_path / "a"])
+    assert dirs and str(dirs[0]).endswith("logs")
