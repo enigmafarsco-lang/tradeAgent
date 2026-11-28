@@ -70,6 +70,49 @@ class Prediction:
     hit: int | None = None
 
 
+
+def horizon_scan(candles: Sequence[Candle], horizons: Sequence[int] = (3, 5, 10, 15, 30, 60),
+                 cost_bp: float = 1.0) -> list[dict[str, Any]]:
+    """برای هر افق: میانگین |حرکت| و سهم حرکت‌هایی که از هزینه بزرگ‌ترند.
+
+    سؤال اصلی: با این هزینه، کدام افق اصلاً جای سود دارد؟ اگر میانگین |حرکت| در افق از هزینه
+    کمتر باشد، هیچ مدلی نمی‌تواند سود بسازد.
+    """
+    rows: list[dict[str, Any]] = []
+    n = len(candles)
+    for h in horizons:
+        moves: list[float] = []
+        for i in range(60, n - h):
+            a, b = candles[i].close, candles[i + h].close
+            if a:
+                moves.append(abs((b / a - 1.0) * 1e4))
+        if not moves:
+            continue
+        moves.sort()
+        avg = sum(moves) / len(moves)
+        p75 = moves[int(len(moves) * 0.75)]
+        over = sum(1 for m in moves if m > 2 * cost_bp) / len(moves)
+        rows.append({
+            "horizon": h,
+            "n": len(moves),
+            "avg_abs_bp": round(avg, 2),
+            "p75_bp": round(p75, 2),
+            "share_over_2x_cost_pct": round(100.0 * over, 1),
+            "viable": avg > 2 * cost_bp,
+        })
+    return rows
+
+
+def render_scan(rows: Sequence[dict[str, Any]], cost_bp: float) -> str:
+    lines = [
+        f"افق | نمونه | میانگین |حرکت| | صدک ۷۵ | سهم >{cost_bp * 2:g}bp | سود ممکن؟",
+        "--- | --- | --- | --- | --- | ---",
+    ]
+    for r in rows:
+        lines.append(f"{r['horizon']} کندل | {r['n']} | {r['avg_abs_bp']:.2f}bp | {r['p75_bp']:.2f}bp | "
+                     f"{r['share_over_2x_cost_pct']}% | {'بله' if r['viable'] else 'نه'}")
+    return "\n".join(lines)
+
 def _utc(ts: Any) -> str:
     try:
         return time.strftime("%Y-%m-%d %H:%M", time.gmtime(float(ts)))
@@ -118,6 +161,25 @@ def _parse_reply(text: str, horizon: int) -> dict[str, Any]:
     }
 
 
+def trend_rule(candles: Sequence[Candle], i: int, flat_bp: float = 0.0) -> dict[str, Any]:
+    """قاعدهٔ سخت‌گیرانه‌تر: ۵ و ۱۵ دقیقه هم‌جهت، و حرکت از آستانه بیشتر.
+
+    خط مبنای منصفانه: اگر همین ساده هم بهتر از هر مدلی بود، مشکل مدل نیست، داده/افق است.
+    """
+    c5 = candles[max(0, i - 5)].close
+    c15 = candles[max(0, i - 15)].close
+    m5 = ((candles[i].close / c5) - 1.0) * 1e4 if c5 else 0.0
+    m15 = ((candles[i].close / c15) - 1.0) * 1e4 if c15 else 0.0
+    if abs(m5) < flat_bp or (m5 > 0) != (m15 > 0):
+        return {"direction": "flat", "strength": 0.2, "confidence": 0.3,
+                "reason": f"۵ دقیقه {m5:+.1f}bp و ۱۵ دقیقه {m15:+.1f}bp؛ هم‌جهت نیستند یا زیر آستانه‌اند."}
+    direction = "up" if m5 > 0 else "down"
+    agree = min(abs(m5), abs(m15)) / max(abs(m5), abs(m15), 1e-9)
+    return {"direction": direction, "strength": min(1.0, abs(m5) / 10.0),
+            "confidence": round(0.4 + 0.4 * agree, 2),
+            "reason": f"۵ دقیقه {m5:+.1f}bp و ۱۵ دقیقه {m15:+.1f}bp هر دو {direction}."}
+
+
 def momentum_rule(candles: Sequence[Candle], i: int, flat_bp: float = 0.0) -> dict[str, Any]:
     """قاعدهٔ سادهٔ ۵ دقیقه — پیش‌فرض بدون مدل، و خط مبنا.
 
@@ -147,6 +209,7 @@ class Studio:
         cost_bp: float = 1.0,
         min_conf: float = 0.0,
         extra_dirs: Sequence[Path] = (),
+        skip_frozen: bool = True,
     ) -> None:
         self.root = Path(root)
         self.symbol = symbol
@@ -160,6 +223,8 @@ class Studio:
         self.min_conf = min_conf
         self.extra_dirs = [Path(d) for d in extra_dirs]
         self.data_stats: dict[str, Any] = {}
+        self.skip_frozen = skip_frozen
+        self.frozen_skipped = 0
         self.cache: dict[str, Any] = self._load_cache()
         self.candles: list[Candle] = []
         self.preds: list[Prediction] = []
@@ -191,6 +256,16 @@ class Studio:
                 pass
 
     # -- پیش‌بینی --------------------------------------------------------
+    def is_frozen(self, i: int) -> bool:
+        """دقیقهٔ مرده: بازار بسته است یا قیمت تکان نخورده (تعطیلی/پایان هفته)."""
+        c = self.candles[i]
+        if c.ticks < 2:
+            return True
+        if c.high == c.low:
+            return True
+        ref = self.candles[max(0, i - 5)]
+        return ref.close == c.close and c.high == c.low
+
     def predict(self, i: int) -> dict[str, Any]:
         digest = _digest(self.candles, i, self.window)
         key = hashlib.sha1(
@@ -201,7 +276,8 @@ class Studio:
             out["source"] = "cache"
             return out
         if self.chat is None:
-            out = momentum_rule(self.candles, i, self.flat_bp)
+            rule = getattr(self, "rule", None)
+            out = rule(i) if rule else momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
             return out
         prompt = PREDICT_PROMPT.format(
@@ -285,6 +361,10 @@ class Studio:
         i = self._cursor
         if i >= stop:
             return None
+        if self.skip_frozen and self.is_frozen(i):
+            self.frozen_skipped += 1
+            self._cursor = i + max(1, int(getattr(self, "_step_override", 0) or self.step_min))
+            return {"skipped": True, "i": i}
         pred = self.predict(i)
         point = Prediction(
             i=i, t=self.candles[i].t, entry=self.candles[i].close,
@@ -306,6 +386,7 @@ class Studio:
         self._cursor = None
         self._saved = 0
         self.failures = 0
+        self.frozen_skipped = 0
         self.last_error = ""
         self._full_write = True
         self.save()
@@ -316,9 +397,13 @@ class Studio:
             return 0
         self.rewind()
         made = 0
-        while made < max(0, int(steps)):
-            if self.step() is None:
+        target = max(0, int(steps))
+        while made < target:
+            res = self.step()
+            if res is None:
                 break
+            if res.get("skipped"):
+                continue
             made += 1
         self.save()
         return made
@@ -393,8 +478,11 @@ class Studio:
             while True:
                 if limit and made >= limit:
                     break
-                if self.step() is None:
+                res = self.step()
+                if res is None:
                     break
+                if res.get("skipped"):
+                    continue
                 made += 1
                 if made % 25 == 0 or made == total:
                     self.save()
@@ -411,6 +499,11 @@ class Studio:
         self.save()
         return {"ok": True, **self.stats(), "candles": n, "step_min": step}
 
+
+    def scan(self) -> list[dict[str, Any]]:
+        if not self.ensure_data():
+            return []
+        return horizon_scan(self.candles, cost_bp=self.cost_bp)
 
     # -- گزارش برای بازبینی ---------------------------------------------
     def review(self) -> dict[str, Any]:
@@ -447,6 +540,11 @@ class Studio:
                 if directional else 0.0,
                 "avg_actual_bp": round(sum(p.actual_bp or 0 for p in scored) / len(scored), 2) if scored else 0.0,
                 "model_errors": self.failures,
+            "frozen_skipped": self.frozen_skipped,
+            "avg_abs_move_bp": round(sum(abs(p.actual_bp or 0) for p in scored) / len(scored), 2)
+            if scored else 0.0,
+            "breakeven_ok": bool(scored) and (sum(abs(p.actual_bp or 0) for p in scored) / len(scored))
+            > self.cost_bp,
             },
             "trades": self.trade_stats(),
             "by_direction": bucket(lambda p: p.direction),
@@ -482,6 +580,9 @@ class Studio:
             f"- تصمیم: {tot['decisions']} · سنجیده: {tot['scored']} · دقت کل: **{tot['hit_pct']}%**",
             f"- فقط جهت‌دار (up/down): {tot['directional']} تصمیم · دقت: **{tot['directional_hit_pct']}%**",
             f"- میانگین حرکت واقعی بعد از افق: {tot['avg_actual_bp']:+.2f}bp · خطای مدل: {tot['model_errors']}",
+            f"- دقیقه‌های مرده که رد شدند (بازار بسته): {tot.get('frozen_skipped', 0)}",
+            f"- میانگین |حرکت| در افق: {tot.get('avg_abs_move_bp', 0):.2f}bp در برابر هزینهٔ {st['cost_bp']}bp "
+            f"→ {'سربه‌سر ممکن است' if tot.get('breakeven_ok') else 'هزینه از حرکت بزرگ‌تر است؛ با این افق سود ممکن نیست'}",
             "",
             "## معاملات کاغذی",
             f"- بازشده: {tr['trades']} · بسته: {tr['closed']} · باز: {tr['open']}",
@@ -904,9 +1005,14 @@ def serve(
                     elif n <= 0:                     # تا آخر
                         studio.walk()
                     else:
-                        for _ in range(min(n, 500)):
-                            if studio.step() is None:
+                        made = 0
+                        while made < min(n, 500):
+                            res = studio.step()
+                            if res is None:
                                 break
+                            if res.get("skipped"):
+                                continue
+                            made += 1
                     studio.save()
                     body = json.dumps(studio.state(), ensure_ascii=False).encode()
                 self._send(body, "application/json; charset=utf-8")

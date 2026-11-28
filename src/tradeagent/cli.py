@@ -94,8 +94,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--horizon", type=int, default=3, help="افق: چند کندل M1 بعد")
     p_studio.add_argument("--limit", type=int, default=None, help="حداکثر چند تصمیم (برای آزمون سریع)")
     p_studio.add_argument("--flat-bp", type=float, default=3.0, help="کمتر از این حرکت = خنثی")
+    p_studio.add_argument("--cost-bp", type=float, default=1.0, help="هزینهٔ فرضی هر معامله (bp)")
     p_studio.add_argument("--min-conf", type=float, default=0.0,
                           help="کمترین اطمینان برای باز کردن معاملهٔ کاغذی")
+    p_studio.add_argument("--no-skip-frozen", action="store_true",
+                          help="دقیقه‌های مرده (بازار بسته/قیمت ثابت) را هم حساب کن")
+    p_studio.add_argument("--scan", action="store_true",
+                          help="فقط بگو با این هزینه کدام افق جای سود دارد (بدون تصمیم‌گیری)")
+    p_studio.add_argument("--rule", choices=["momentum", "trend"], default="momentum",
+                          help="قاعدهٔ جایگزین مدل: momentum (۵ دقیقه) یا trend (۵ و ۱۵ دقیقه هم‌جهت)")
     p_studio.add_argument("--no-llm", action="store_true", help="بدون مدل: فقط قاعدهٔ تکانه")
     p_studio.add_argument("--serve", action="store_true", help="اپ را روی پورت بالا بیاور")
     p_studio.add_argument("--auto", action="store_true",
@@ -377,6 +384,28 @@ def cmd_studio(cfg: Any, args: Any) -> int:
         print("  فایل تیکی پیدا نشد؛ با --data مسیر logs را بده.")
         return 1
 
+    if getattr(args, "scan", False):
+        from .studio import render_scan
+
+        studio = Studio(root, symbol, out_dir, chat=None, step_min=args.step_min,
+                        horizon=args.horizon, flat_bp=args.flat_bp, extra_dirs=logs,
+                        cost_bp=args.cost_bp)
+        rows = studio.scan()
+        if not rows:
+            print("  کندل کافی نیست.")
+            return 1
+        cov = studio.coverage()
+        print(f"  داده: {cov['files']} فایل · {cov['ticks']:,} تیک · {cov['candles']} کندل M1 · شکاف {cov['gaps']}")
+        print("  " + render_scan(rows, args.cost_bp).replace("\n", "\n  "))
+        best = [r for r in rows if r["viable"]]
+        if best:
+            print(f"  کمترین افق که جای سود دارد: {best[0]['horizon']} کندل "
+                  f"(میانگین {best[0]['avg_abs_bp']}bp در برابر هزینهٔ {args.cost_bp}bp)")
+        else:
+            print(f"  هیچ افقی تا {rows[-1]['horizon']} کندل میانگین حرکتش از ۲ برابر هزینه "
+                  f"({args.cost_bp * 2:g}bp) بیشتر نیست؛ با این هزینه معامله معنا ندارد.")
+        return 0
+
     chat = None
     if not args.no_llm:
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
@@ -392,7 +421,11 @@ def cmd_studio(cfg: Any, args: Any) -> int:
 
     studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min,
                     horizon=args.horizon, flat_bp=args.flat_bp, min_conf=args.min_conf,
-                    extra_dirs=logs)
+                    extra_dirs=logs, skip_frozen=not args.no_skip_frozen)
+    if args.rule == "trend" and chat is None:
+        from .studio import trend_rule
+
+        studio.rule = lambda i: trend_rule(studio.candles, i, studio.flat_bp)
 
     def progress(info: dict[str, Any]) -> None:
         eta = info.get("eta_s") or 0

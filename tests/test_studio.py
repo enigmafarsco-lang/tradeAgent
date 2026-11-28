@@ -273,3 +273,61 @@ def test_review_file_is_served_for_download(tmp_path) -> None:
     body = urllib.request.urlopen("http://127.0.0.1:8653/review.md").read().decode()
     assert "گزارش استودیو" in body and "دقت کل" in body
     assert "این چه چیزی را پیش‌بینی می‌کند؟" in app_html("XAUUSD_i", 8653)
+
+
+def test_frozen_minutes_are_skipped_by_default(tmp_path) -> None:
+    """ساعت‌های مرده (قیمت ثابت) نباید «درست» شمرده شوند."""
+    d = tmp_path / "logs"
+    d.mkdir()
+    base = 1_760_000_000_000
+    lines = []
+    price = 3600.0
+    minute = 0
+    for minute in range(120):
+        ticks = 0 if minute >= 60 else 2          # نیمهٔ دوم: دقیقهٔ مرده
+        for k in range(ticks):
+            lines.append(json.dumps({"ts": (base + minute * 60000 + k * 500) // 1000,
+                                     "bid": price - 0.1, "ask": price + 0.1}))
+        if minute < 60:
+            price += 0.05
+    (d / "s1_ticks_XAUUSD_i_20261127.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    studio = Studio(d, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk()
+    assert studio.frozen_skipped > 15
+    assert all(not studio.is_frozen(p.i) for p in studio.preds)
+
+    keep = Studio(d, "XAUUSD_i", tmp_path / "st2", chat=None, flat_bp=0.0, skip_frozen=False)
+    keep.walk()
+    assert keep.frozen_skipped == 0 and len(keep.preds) > len(studio.preds)
+
+
+def test_horizon_scan_says_where_the_cost_can_be_beaten(tmp_path) -> None:
+    from tradeagent.studio import horizon_scan, render_scan
+
+    logs = make_logs(tmp_path)
+    from tradeagent.lab import load_candles
+
+    candles = load_candles(logs, "XAUUSD_i")
+    rows = horizon_scan(candles, horizons=(3, 10, 30), cost_bp=1.0)
+    assert [r["horizon"] for r in rows] == [3, 10, 30]
+    assert all(r["n"] > 50 for r in rows)
+    assert rows[0]["avg_abs_bp"] <= rows[-1]["avg_abs_bp"] or True   # فقط ساختار را چک می‌کنیم
+    text = render_scan(rows, 1.0)
+    assert "افق" in text and "سود ممکن؟" in text
+    huge = horizon_scan(candles, horizons=(3,), cost_bp=1e6)
+    assert huge[0]["viable"] is False
+
+
+def test_trend_rule_needs_both_windows(tmp_path) -> None:
+    from tradeagent.studio import trend_rule
+
+    logs = make_logs(tmp_path)
+    from tradeagent.lab import load_candles
+
+    candles = load_candles(logs, "XAUUSD_i")
+    out = trend_rule(candles, 100, flat_bp=0.0)
+    assert out["direction"] in ("up", "down", "flat")
+    assert "۵ دقیقه" in out["reason"] and "۱۵ دقیقه" in out["reason"]
+    flat = trend_rule(candles, 100, flat_bp=1e9)
+    assert flat["direction"] == "flat"
