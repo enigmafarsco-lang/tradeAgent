@@ -125,10 +125,27 @@ def _iso(ts: int) -> str:
 # ---------------------------------------------------------------------------
 # پیش‌بینی با مدل
 # ---------------------------------------------------------------------------
-def model_predict(chat: Callable[[list[dict[str, str]]], str], bars: Sequence[Bar], horizon_s: int) -> dict[str, Any]:
+def model_predict(
+    chat: Callable[[list[dict[str, str]]], str],
+    bars: Sequence[Bar],
+    horizon_s: int,
+    cache: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """پیش‌بینی مدل، با کش روی (عددهای داده + افق).
+
+    کش از درس‌های پروژه‌های مشابه است: بازپخش دوم نباید دوباره مدل را صدا بزند، وگرنه هر
+    قطعی مدل همهٔ کار قبلی را از بین می‌برد.
+    """
+    import hashlib
+
     digest = tick_digest(bars)
     if not digest:
         return {}
+    key = hashlib.sha1(
+        (json.dumps(digest, sort_keys=True, ensure_ascii=False) + f"|{horizon_s}").encode("utf-8")
+    ).hexdigest()
+    if cache is not None and key in cache:
+        return dict(cache[key])
     prompt = PREDICT_PROMPT.format(digest=json.dumps(digest, ensure_ascii=False), horizon=horizon_s)
     reply = chat([{"role": "system", "content": "فقط JSON. متن‌ها فارسی."}, {"role": "user", "content": prompt}])
     data = parse_agent_reply(reply or "")
@@ -140,6 +157,8 @@ def model_predict(chat: Callable[[list[dict[str, str]]], str], bars: Sequence[Ba
         momentum["expected_bp"] = float(momentum.get("expected_bp") or 0.0)
     except (TypeError, ValueError):
         momentum["expected_bp"] = 0.0
+    if cache is not None:
+        cache[key] = momentum
     return momentum
 
 
@@ -152,6 +171,7 @@ class Step:
     price: float
     pred: dict[str, Any]
     due_ts: int
+    ctx_mom_bp: float = 0.0          # حرکت ۵ دقیقهٔ قبل از تصمیم (برای خط مبنا)
     actual_bp: float | None = None
     hit: int | None = None
 
@@ -182,6 +202,7 @@ class Replay:
         files = tick_files(self.root, self.symbol)
         if not files:
             return {"ok": False, "error": f"هیچ فایل تیکی برای {self.symbol} در {self.root} نیست"}
+        cache = load_cache(self.out / "llm_cache.json")
         window = max(self.warmup_s, 1800)
         buf: deque[Bar] = deque(maxlen=window)
         steps: list[Step] = []
@@ -204,7 +225,12 @@ class Replay:
                     LOG.warning("پیش‌بینی ناموفق: %s", last_error)
                     pred = {}
                 if pred:
-                    steps.append(Step(ts=bar.t, price=bar.close, pred=pred, due_ts=bar.t + self.horizon_s))
+                    ref = buf[-min(len(buf), 300)]
+                    mom_bp = (bar.close / ref.close - 1.0) * 1e4 if ref.close else 0.0
+                    steps.append(
+                        Step(ts=bar.t, price=bar.close, pred=pred,
+                             due_ts=bar.t + self.horizon_s, ctx_mom_bp=mom_bp)
+                    )
                 next_step = bar.t + self.step_s
                 if limit_steps and len(steps) >= limit_steps:
                     break
@@ -213,6 +239,7 @@ class Replay:
                 if step.actual_bp is None and bar.t >= step.due_ts:
                     step.actual_bp = (bar.close / step.price - 1.0) * 1e4 if step.price else 0.0
                     step.hit = _score(step.pred.get("direction"), step.actual_bp)
+        save_cache(self.out / "llm_cache.json", cache)
         stats = summarize_steps(steps, self.cost_bp, self.horizon_s)
         stats.update(
             {
@@ -256,6 +283,57 @@ class Replay:
         (self.out / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_cache(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_cache(path: Path, cache: dict[str, Any]) -> None:
+    if not cache:
+        return
+    try:
+        Path(path).write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def baselines(steps: Sequence[Step], cost_bp: float) -> dict[str, dict[str, Any]]:
+    """خط مبنا: مقایسه با «همیشه بالا»، «همیشه پایین» و «تکانهٔ ۵ دقیقهٔ قبل».
+
+    درسِ پروژه‌های مشابه: عددِ مدل بدون مقایسه با ساده‌ترین قاعده معنا ندارد.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    rules = {
+        "همیشه بالا": lambda s: "up",
+        "همیشه پایین": lambda s: "down",
+        "تکانهٔ ۵ دقیقه": lambda s: (
+            "up" if getattr(s, "ctx_mom_bp", 0.0) > 0
+            else "down" if getattr(s, "ctx_mom_bp", 0.0) < 0 else "flat"
+        ),
+    }
+    scored = [s for s in steps if s.actual_bp is not None]
+    for name, rule in rules.items():
+        hits = 0
+        net = 0.0
+        for step in scored:
+            direction = rule(step)
+            actual = step.actual_bp or 0.0
+            hits += _score(direction, actual)
+            if direction == "up":
+                net += actual - cost_bp
+            elif direction == "down":
+                net += -actual - cost_bp
+        out[name] = {
+            "n": len(scored),
+            "hit_pct": round(100.0 * hits / max(1, len(scored)), 1),
+            "avg_net_bp": round(net / max(1, len(scored)), 2),
+        }
+    return out
+
+
 def _score(direction: Any, actual_bp: float, flat_bp: float = 3.0) -> int:
     """۱ اگر جهت درست بود؛ flat وقتی حرکت کمتر از آستانه بود هم درست حساب می‌شود."""
     if direction == "flat":
@@ -293,6 +371,7 @@ def summarize_steps(steps: Sequence[Step], cost_bp: float, horizon_s: int) -> di
     return {
         "steps": len(steps),
         "scored": len(scored),
+        "baselines": baselines(steps, cost_bp),
         "hit_pct": round(100.0 * hits / max(1, len(scored)), 1) if scored else 0.0,
         "avg_net_bp": round(sum(signed) / max(1, len(signed)), 2) if signed else 0.0,
         "sum_net_bp": round(sum(signed), 1) if signed else 0.0,
@@ -357,6 +436,11 @@ def render_html(rows: Sequence[dict[str, Any]], stats: dict[str, Any]) -> str:
         value = row.get("actual_bp")
         return "—" if value is None else f"{value:+.2f}"
 
+    base_rows = "".join(
+        f"<tr><td>{html.escape(name)}</td><td>{v['n']}</td><td>{v['hit_pct']}%</td>"
+        f"<td>{v['avg_net_bp']:+.2f}</td></tr>"
+        for name, v in (stats.get("baselines") or {}).items()
+    )
     tail = "".join(
         f"<tr><td>{html.escape(str(r['time']))}</td><td>{r['direction']}</td>"
         f"<td>{r.get('confidence')}</td><td>{r.get('expected_bp')}</td>"
@@ -390,6 +474,9 @@ def render_html(rows: Sequence[dict[str, Any]], stats: dict[str, Any]) -> str:
 {_svg(rows)}
 <table><thead><tr><th>جهت</th><th>تعداد</th><th>درست</th><th>میانگین bp</th></tr></thead>
 <tbody>{dir_rows}</tbody></table>
+<h2 style="font-size:16px;margin-top:22px">مدل در برابر خط مبنا</h2>
+<table><thead><tr><th>قاعده</th><th>تعداد</th><th>درست</th><th>میانگین خالص bp</th></tr></thead>
+<tbody><tr><td><b>مدل</b></td><td>{stats.get('scored')}</td><td><b>{stats.get('hit_pct')}%</b></td><td><b>{stats.get('avg_net_bp'):+.2f}</b></td></tr>{base_rows}</tbody></table>
 <h2 style="font-size:16px;margin-top:22px">۴۰ پیش‌بینی آخر</h2>
 <table><thead><tr><th>زمان</th><th>جهت</th><th>اطمینان</th><th>انتظار bp</th><th>واقعی bp</th><th>درست؟</th><th>تحلیل مدل</th></tr></thead>
 <tbody>{tail}</tbody></table>

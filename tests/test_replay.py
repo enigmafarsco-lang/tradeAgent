@@ -141,3 +141,37 @@ def test_replay_cli_retries_the_model_before_giving_up() -> None:
     assert "for attempt in range(1, 6)" in body
     assert "journalctl --user -u ollama" in body
     assert "/api/chat" in body
+
+
+def test_model_answers_are_cached_so_a_rerun_costs_nothing(tmp_path) -> None:
+    """درسِ پروژه‌های مشابه: هر prompt یک بار. بازپخش دوم نباید مدل را صدا بزند."""
+    from tradeagent.ticks import Bar
+
+    bars = [Bar(t=1_700_000_000 + i, open=3600, high=3601, low=3599, close=3600 + i * 0.01,
+                bid_close=3599.9, ask_close=3600.1, spread_bps_max=1.0, ticks=5, volume=1.0)
+            for i in range(200)]
+    calls = {"n": 0}
+
+    def chat(messages):  # noqa: ANN001
+        calls["n"] += 1
+        return json.dumps({"analysis": "بالا", "momentum": {"direction": "up", "phase": "steady"}})
+
+    cache: dict = {}
+    first = model_predict(chat, bars, 300, cache)
+    second = model_predict(chat, bars, 300, cache)
+    assert calls["n"] == 1
+    assert first == second and first["direction"] == "up"
+
+
+def test_baselines_are_reported_next_to_the_model(tmp_path) -> None:
+    root = make_ticks(tmp_path)
+
+    def predictor(bars, horizon):  # noqa: ANN001
+        return {"direction": "up", "phase": "steady", "strength": 0.5, "confidence": 0.5,
+                "horizon_s": horizon, "expected_bp": 0.0, "analysis": "x"}
+
+    stats = Replay(root, "XAUUSD_i", predictor, step_s=300, horizon_s=300, warmup_s=600,
+                   out_dir=tmp_path / "out").run()
+    assert set(stats["baselines"]) == {"همیشه بالا", "همیشه پایین", "تکانهٔ ۵ دقیقه"}
+    html = (tmp_path / "out" / "index.html").read_text(encoding="utf-8")
+    assert "مدل در برابر خط مبنا" in html

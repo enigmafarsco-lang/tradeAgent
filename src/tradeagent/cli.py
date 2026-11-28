@@ -71,7 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay.add_argument("--limit", type=int, default=0, help="حداکثر تعداد پیش‌بینی (۰=همه)")
     p_replay.add_argument("--out", default="var/backtest", help="پوشهٔ خروجی گزارش")
     p_replay.add_argument("--publish", action="store_true", help="گزارش را روی شاخهٔ reports پوش کن")
-    p_replay.add_argument("--fake", choices=["up", "down", "flat", "random"], default=None, help="پیش‌بینی‌کنندهٔ ساختگی (تست بدون مدل)")
+    p_replay.add_argument("--fake", choices=["up", "down", "flat", "random", "momentum"], default=None,
+                          help="پیش‌بینی‌کنندهٔ ساختگی/قاعده‌ای (تست بدون مدل)")
+    p_replay.add_argument("--model", default=None, help="نام مدل ollama (پیش‌فرض: llm.ollama_model)")
 
     p_pub = sub.add_parser("publish-test", help="تست کامیت/پوش گزارش‌ها")
     p_pub.add_argument("--write", action="store_true", help="کامیت واقعی (پیش‌فرض: فقط بررسی کلون)")
@@ -191,17 +193,26 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
     import random
 
     from .loop import resolve_harvester_dir
-    from .replay import Replay, model_predict
+    from .replay import Replay, load_cache, model_predict, save_cache
 
     root = resolve_harvester_dir(cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"))
     symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+    out_dir = cfg.path(args.out, args.out)
+    if args.model:
+        cfg.set("llm.ollama_model", args.model)
 
     if args.fake:
         def predictor(bars, horizon):  # noqa: ANN001, ANN202
-            direction = args.fake if args.fake != "random" else random.choice(["up", "down", "flat"])
+            if args.fake == "momentum":
+                ref = bars[-min(len(bars), 300)]
+                direction = "up" if bars[-1].close > ref.close else "down" if bars[-1].close < ref.close else "flat"
+                analysis = f"قاعده: مقایسهٔ قیمت با ۵ دقیقهٔ قبل ({direction})"
+            else:
+                direction = args.fake if args.fake != "random" else random.choice(["up", "down", "flat"])
+                analysis = f"پیش‌بینی ساختگی: {direction}"
             return {"direction": direction, "phase": "steady", "strength": 0.5,
                     "confidence": 0.5, "horizon_s": horizon, "expected_bp": 0.0,
-                    "analysis": f"پیش‌بینی ساختگی: {direction}"}
+                    "analysis": analysis}
     else:
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = False, ""
@@ -220,8 +231,10 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
             return 1
         print(f"  مدل آماده است: {why}")
 
+        cache = load_cache(out_dir / "llm_cache.json")
+
         def predictor(bars, horizon):  # noqa: ANN001, ANN202
-            return model_predict(advisor.chat, bars, horizon)
+            return model_predict(advisor.chat, bars, horizon, cache)
 
     run = Replay(
         root=root,
@@ -246,14 +259,15 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
           f"· میانگین خالص: {stats['avg_net_bp']}bp · {stats['elapsed_s']}s")
     for direction, bucket in sorted((stats.get("by_direction") or {}).items()):
         print(f"    {direction}: n={bucket['n']} · درست {bucket['hit_pct']}% · میانگین {bucket['avg_bp']}bp")
-    out = cfg.path(args.out, args.out)
-    print(f"  گزارش: {out / 'index.html'}")
+    if not args.fake:
+        save_cache(out_dir / "llm_cache.json", cache)
+    print(f"  گزارش: {out_dir / 'index.html'}")
     if args.publish and not args.fake:
         pub = Publisher(cfg, cfg.root).publish(
             {
-                "backtest/index.html": (out / "index.html").read_text(encoding="utf-8"),
-                "backtest/predictions.jsonl": (out / "predictions.jsonl").read_text(encoding="utf-8"),
-                "backtest/stats.json": (out / "stats.json").read_text(encoding="utf-8"),
+                "backtest/index.html": (out_dir / "index.html").read_text(encoding="utf-8"),
+                "backtest/predictions.jsonl": (out_dir / "predictions.jsonl").read_text(encoding="utf-8"),
+                "backtest/stats.json": (out_dir / "stats.json").read_text(encoding="utf-8"),
             },
             "replay: پیش‌بینی ۵ دقیقه‌ای مدل روی تیک‌های واقعی",
         )

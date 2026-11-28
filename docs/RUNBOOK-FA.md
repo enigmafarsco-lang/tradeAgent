@@ -702,3 +702,19 @@ wine را چاپ می‌کند. کرش‌های WebView2 (پنل Community/News)
 5. با `--publish` همان سه فایل روی شاخهٔ `reports` (زیر `backtest/`) کامیت می‌شود.
 
 هیچ‌جا پایتون جهت را حدس نمی‌زند؛ فقط عدد می‌دهد و بعد امتیاز می‌دهد.
+
+
+## چه چیزی از پروژه‌های متن‌باز یاد گرفتیم
+
+سه چیز که در `replay` پیاده شد (و چرا):
+
+1. **کشِ پاسخ مدل** — `dsjwong/stockagent-backtester` هر prompt را روی دیسک نگه می‌دارد تا
+   بازپخش دوم صفر هزینه باشد و یک قطعی مدل کار قبلی را نکشد. ما هم `var/backtest/llm_cache.json`.
+2. **خط مبنا** — همان پروژه و `amenibelhaj/autonomous-fin-agent` نتیجه را کنار «همیشه بالا»،
+   «همیشه پایین» و قاعدهٔ ساده می‌گذارند؛ عدد مدل تنها معنا ندارد. ما «تکانهٔ ۵ دقیقه» را هم
+   به عنوان قاعده گذاشتیم.
+3. **بدون نگاه به آینده** — `TauricResearch/TradingAgents` و `stockagent-backtester` روی
+   point-in-time بودن تأکید دارند: در بازپخش، مدل فقط کندل‌های تا لحظهٔ تصمیم را می‌بیند.
+
+منابع: github.com/dsjwong/stockagent-backtester · github.com/amenibelhaj/autonomous-fin-agent ·
+github.com/TauricResearch/TradingAgents
