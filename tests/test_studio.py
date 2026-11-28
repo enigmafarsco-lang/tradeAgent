@@ -102,3 +102,51 @@ def test_momentum_rule_speaks_persian(tmp_path) -> None:
     out = momentum_rule(candles, 60)
     assert out["direction"] in ("up", "down", "flat")
     assert "bp" in out["reason"] and any("\u0600" <= ch <= "\u06ff" for ch in out["reason"])
+
+
+def test_step_cursor_moves_and_paper_trades_open_and_close(tmp_path) -> None:
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, step_min=1, horizon=3)
+    first = studio.step()
+    assert first is not None and first["direction"] in ("up", "down", "flat")
+    start = studio._cursor
+    studio.step()
+    assert studio._cursor == start + 1
+    stats = studio.trade_stats()
+    assert stats["trades"] >= 0 and stats["closed"] + stats["open"] == stats["trades"]
+    for _ in range(12):
+        studio.step()
+    assert studio.trade_stats()["closed"] > 0
+
+
+def test_flat_predictions_do_not_open_a_trade(tmp_path) -> None:
+    logs = make_logs(tmp_path)
+
+    def chat(messages):  # noqa: ANN001
+        return json.dumps({"direction": "flat", "strength": 0.1, "confidence": 0.9, "reason": "بی‌جهت"})
+
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=chat)
+    for _ in range(6):
+        studio.step()
+    assert studio.preds and studio.trade_stats()["trades"] == 0
+
+
+def test_next_button_endpoint_advances_the_agent(tmp_path) -> None:
+    import threading
+    import time
+    import urllib.request
+
+    from tradeagent.studio import serve
+
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None)
+    studio.walk(limit=5)
+    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8632),
+                     kwargs={"studio": studio}, daemon=True).start()
+    time.sleep(1.2)
+    before = studio.stats()["predictions"]
+    data = json.load(urllib.request.urlopen("http://127.0.0.1:8632/api/next?n=3"))
+    assert data["stats"]["predictions"] == before + 3
+    assert "trade_stats" in data and "preds" in data
+    page = urllib.request.urlopen("http://127.0.0.1:8632/").read().decode()
+    assert "قدم بعد" in page and "api/next" in page and "معاملات کاغذی" in page

@@ -40,6 +40,23 @@ PREDICT_PROMPT = """تو یک تحلیل‌گر روند طلا/شاخص هست�
 
 
 @dataclass
+class Trade:
+    """معاملهٔ کاغذی که از تحلیل ایجنت باز می‌شود (خنثی معامله نمی‌کند)."""
+
+    i: int
+    t: int
+    side: int                  # +1 خرید، -1 فروش
+    entry: float
+    reason: str
+    source: str
+    confidence: float
+    exit_t: int | None = None
+    exit_px: float | None = None
+    bp: float | None = None
+    hit: int | None = None
+
+
+@dataclass
 class Prediction:
     i: int                     # ایندکس کندلی که تصمیم روی آن گرفته شد
     t: int                     # ثانیهٔ آن کندل
@@ -115,6 +132,7 @@ class Studio:
         window: int = 30,
         flat_bp: float = 3.0,
         cost_bp: float = 1.0,
+        min_conf: float = 0.0,
     ) -> None:
         self.root = Path(root)
         self.symbol = symbol
@@ -125,12 +143,15 @@ class Studio:
         self.window = max(10, int(window))
         self.flat_bp = flat_bp
         self.cost_bp = cost_bp
+        self.min_conf = min_conf
         self.cache: dict[str, Any] = self._load_cache()
         self.candles: list[Candle] = []
         self.preds: list[Prediction] = []
         self.failures = 0
         self.last_error = ""
         self._saved = 0
+        self._cursor: int | None = None
+        self.trades: list[Trade] = []
         self.started = time.time()
 
     # -- کش -------------------------------------------------------------
@@ -190,6 +211,7 @@ class Studio:
 
     # -- امتیاز ----------------------------------------------------------
     def _score_ready(self, upto_i: int) -> None:
+        self._close_trades(upto_i)
         for p in self.preds:
             if p.hit is not None or p.i + self.horizon > upto_i:
                 continue
@@ -219,6 +241,70 @@ class Studio:
             "last_error": self.last_error,
         }
 
+    # -- یک قدم ---------------------------------------------------------
+    def ensure_data(self) -> bool:
+        if not self.candles:
+            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache")
+        return len(self.candles) >= self.window + self.horizon + 5
+
+    def step(self) -> dict[str, Any] | None:
+        """یک تصمیم جلو می‌رود (همان دکمهٔ «قدم بعد» در اپ)."""
+        if not self.ensure_data():
+            return None
+        if self._cursor is None:
+            self._cursor = self.window - 1
+        stop = len(self.candles) - self.horizon
+        i = self._cursor
+        if i >= stop:
+            return None
+        pred = self.predict(i)
+        point = Prediction(
+            i=i, t=self.candles[i].t, entry=self.candles[i].close,
+            direction=pred["direction"], strength=float(pred.get("strength", 0.5)),
+            confidence=float(pred.get("confidence", 0.5)),
+            reason=str(pred.get("reason", "")), source=pred.get("source", "?"),
+        )
+        self.preds.append(point)
+        self._score_ready(i)
+        self._maybe_trade(point)
+        self._cursor = i + max(1, int(getattr(self, "_step_override", 0) or self.step_min))
+        self.save()
+        return asdict(point)
+
+    def _maybe_trade(self, point: Prediction) -> None:
+        if point.direction == "flat" or point.confidence < self.min_conf:
+            return
+        self.trades.append(Trade(
+            i=point.i, t=point.t, side=1 if point.direction == "up" else -1,
+            entry=point.entry, reason=point.reason, source=point.source,
+            confidence=point.confidence,
+        ))
+
+    def _close_trades(self, upto_i: int) -> None:
+        for tr in self.trades:
+            if tr.hit is not None or tr.i + self.horizon > upto_i:
+                continue
+            exit_px = self.candles[tr.i + self.horizon].close
+            bp = ((exit_px / tr.entry) - 1.0) * 1e4 if tr.entry else 0.0
+            tr.exit_t = self.candles[tr.i + self.horizon].t
+            tr.exit_px = round(exit_px, 3)
+            tr.bp = round(tr.side * bp - self.cost_bp, 3)
+            tr.hit = int(tr.bp > 0)
+
+    def trade_stats(self) -> dict[str, Any]:
+        closed = [t for t in self.trades if t.hit is not None]
+        wins = sum(t.hit or 0 for t in closed)
+        net = sum(t.bp or 0.0 for t in closed)
+        return {
+            "trades": len(self.trades),
+            "closed": len(closed),
+            "open": len(self.trades) - len(closed),
+            "wins": wins,
+            "win_pct": round(100.0 * wins / len(closed), 1) if closed else 0.0,
+            "net_bp": round(net, 2),
+            "avg_bp": round(net / len(closed), 2) if closed else 0.0,
+        }
+
     # -- حرکت ------------------------------------------------------------
     def walk(self, step_override: int | None = None, limit: int | None = None,
              start_i: int | None = None,
@@ -235,27 +321,27 @@ class Studio:
         total = len(range(start, stop, step))
         if limit:
             total = min(total, limit)
-        for i in range(start, stop, step):
-            pred = self.predict(i)
-            self.preds.append(Prediction(
-                i=i, t=self.candles[i].t, entry=self.candles[i].close,
-                direction=pred["direction"], strength=float(pred.get("strength", 0.5)),
-                confidence=float(pred.get("confidence", 0.5)),
-                reason=str(pred.get("reason", "")), source=pred.get("source", "?"),
-            ))
-            self._score_ready(i)
-            made += 1
-            if made % 25 == 0 or made == total:
-                self.save()
-                if progress:
-                    elapsed = time.time() - self.started
-                    rate = made / elapsed if elapsed else 0.0
-                    progress({"made": made, "total": total,
-                              "eta_s": int((total - made) / rate) if rate else 0,
-                              **self.stats()})
-            if limit and made >= limit:
-                break
+        self._cursor = start
+        self._step_override = step
+        try:
+            while True:
+                if limit and made >= limit:
+                    break
+                if self.step() is None:
+                    break
+                made += 1
+                if made % 25 == 0 or made == total:
+                    self.save()
+                    if progress:
+                        elapsed = time.time() - self.started
+                        rate = made / elapsed if elapsed else 0.0
+                        progress({"made": made, "total": total,
+                                  "eta_s": int((total - made) / rate) if rate else 0,
+                                  **self.stats()})
+        finally:
+            self._step_override = 0
         self._score_ready(n - 1)
+        self._close_trades(n - 1)
         self.save()
         return {"ok": True, **self.stats(), "candles": n, "step_min": step}
 
@@ -272,6 +358,10 @@ class Studio:
                          "l": round(c.low, 3), "c": round(c.close, 3), "n": c.ticks}
                         for c in candles[-1500:]],
             "preds": [asdict(p) for p in self.preds[-400:]],
+            "trades": [asdict(t) for t in self.trades[-200:]],
+            "trade_stats": self.trade_stats(),
+            "cursor": self._cursor,
+            "total_steps": max(0, len(self.candles) - self.horizon - (self.window - 1)),
             "baselines": self._baselines(),
         }
 
@@ -318,92 +408,138 @@ def app_html(symbol: str, port: int) -> str:
 <style>
 :root{--bg:#0b1120;--card:#111c33;--line:#1f2b45;--fg:#e2e8f5;--muted:#8ba0c7;--up:#22c55e;--down:#ef4444}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,Vazirmatn,Tahoma,sans-serif;padding:18px}
-h1{font-size:18px;margin:0} .muted{color:var(--muted);font-size:12px}
-.cards{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 14px;min-width:120px}
-.card .k{font-size:11px;color:var(--muted)} .card .v{font-size:17px;font-weight:700}
-canvas{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px}
-table{width:100%;border-collapse:collapse;font-size:12px;background:var(--card);border-radius:12px;overflow:hidden;margin-top:12px}
-th,td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:right}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,Vazirmatn,Tahoma,sans-serif;padding:16px}
+h1{font-size:18px;margin:0} h2{font-size:14px;margin:16px 0 6px;color:#c7d2fe}
+.muted{color:var(--muted);font-size:12px}
+.cards{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;min-width:105px}
+.card .k{font-size:11px;color:var(--muted)} .card .v{font-size:16px;font-weight:700}
+button{background:#1d4ed8;color:#fff;border:0;border-radius:10px;padding:9px 16px;font-size:14px;cursor:pointer;margin-inline-end:6px}
+button.ghost{background:#1e293b;border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:default}
+canvas{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-top:8px}
+table{width:100%;border-collapse:collapse;font-size:12px;background:var(--card);border-radius:12px;overflow:hidden;margin-top:8px}
+th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right}
 th{background:#16233c;color:var(--muted)}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
 .pill{padding:1px 7px;border-radius:99px;border:1px solid var(--line);font-size:11px}
+.pos{color:var(--up)} .neg{color:var(--down)}
 </style></head><body>
-<h1>استودیو ایجنت — <span id="sym">SYMBOL</span></h1>
-<div class="muted" id="upd">در حال بارگذاری…</div>
+<h1>استودیو ایجنت — <span id="sym">SYMBOL</span> <span class="muted" id="prog"></span></h1>
+<div class="muted" id="upd">…</div>
+<div style="margin:10px 0">
+  <button id="b1" onclick="go(1)">قدم بعد ▶</button>
+  <button class="ghost" onclick="go(5)">۵ قدم</button>
+  <button class="ghost" onclick="go(25)">۲۵ قدم</button>
+  <button class="ghost" onclick="go(0)">تا آخر</button>
+</div>
 <div class="cards" id="cards"></div>
-<canvas id="chart" height="360"></canvas>
-<h2 style="font-size:14px;margin:14px 0 6px">آخرین تصمیم‌ها</h2>
+<canvas id="chart" height="380"></canvas>
+<div class="muted" id="legend">▲/▼ = تصمیم ایجنت روی کندل · خط‌چین = از قیمت تصمیم تا قیمت واقعی بعد از افق · سبز یعنی درست</div>
+<h2>معاملات کاغذی</h2>
+<table><thead><tr><th>زمان</th><th>جهت</th><th>ورود</th><th>خروج</th><th>bp</th><th>نتیجه</th><th>اطمینان</th><th>دلیل</th></tr></thead>
+<tbody id="trades"><tr><td colspan="8" class="muted">…</td></tr></tbody></table>
+<h2>آخرین تصمیم‌ها</h2>
 <table><thead><tr><th>زمان</th><th>جهت</th><th>اطمینان</th><th>منبع</th><th>واقعی</th><th>درست</th><th>دلیل</th></tr></thead>
 <tbody id="rows"><tr><td colspan="7" class="muted">…</td></tr></tbody></table>
 <script>
-const sym = "SYMBOL";
-let state = null;
-function fmt(t){const d=new Date(t*1000);return d.toISOString().slice(5,16).replace('T',' ');}
+let state=null, busy=false;
+const fmt=t=>new Date(t*1000).toISOString().slice(5,16).replace('T',' ');
 function draw(){
-  const c=document.getElementById('chart');
-  if(!state||!state.candles.length) return;
-  const dpr=window.devicePixelRatio||1;
-  c.width=c.clientWidth*dpr; c.height=360*dpr;
-  const ctx=c.getContext('2d'); ctx.scale(dpr,dpr);
-  const W=c.clientWidth, H=360, pad=6;
-  const cs=state.candles.slice(-240);
+  const c=document.getElementById('chart'); if(!state||!state.candles.length) return;
+  const dpr=window.devicePixelRatio||1; c.width=c.clientWidth*dpr; c.height=380*dpr;
+  const ctx=c.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const W=c.clientWidth,H=380,pad=8;
+  const cs=state.candles.slice(-240), first=cs[0].t;
   const hi=Math.max(...cs.map(x=>x.h)), lo=Math.min(...cs.map(x=>x.l));
   const y=v=>pad+(hi-v)/(hi-lo||1)*(H-2*pad);
-  const bw=Math.max(1.5,(W-2*pad)/cs.length*0.65);
-  const step=(W-2*pad)/cs.length;
-  ctx.strokeStyle='#1f2b45'; ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+  const step=(W-2*pad)/cs.length, bw=Math.max(1.5,step*0.62);
+  const xOf=t=>pad+((t-first)/60)*step+step/2;
+  ctx.fillStyle='#0b1120'; ctx.fillRect(0,0,W,H);
   cs.forEach((x,i)=>{
     const cx=pad+i*step+step/2;
-    ctx.strokeStyle=x.c>=x.o?'#22c55e':'#ef4444';
+    ctx.strokeStyle=x.c>=x.o?'#22c55e':'#ef4444'; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(cx,y(x.h)); ctx.lineTo(cx,y(x.l)); ctx.stroke();
     ctx.fillStyle=ctx.strokeStyle;
     const top=y(Math.max(x.o,x.c)), bot=y(Math.min(x.o,x.c));
     ctx.fillRect(cx-bw/2, top, bw, Math.max(1,bot-top));
   });
-  const idx={}; cs.forEach((x,i)=>idx[x.t]=i);
-  state.preds.forEach(p=>{
-    if(!(p.t in idx)) return;
-    const cx=pad+idx[p.t]*step+step/2;
-    const py=p.direction==='up'?y(state.candles.find(z=>z.t===p.t).h)-10:y(state.candles.find(z=>z.t===p.t).l)+10;
+  const closeAt=t=>{const i=Math.round((t-first)/60); return i>=0&&i<cs.length?cs[i].c:null;};
+  (state.preds||[]).forEach(p=>{
+    const entry=closeAt(p.t); if(entry===null) return;
+    const exitT=p.t+state.horizon*60, exitPx=closeAt(exitT);
+    const px=xOf(p.t);
     ctx.fillStyle=p.direction==='up'?'#22c55e':p.direction==='down'?'#ef4444':'#94a3b8';
-    ctx.beginPath(); ctx.arc(cx,py,3,0,6.28); ctx.fill();
+    ctx.beginPath(); ctx.arc(px,y(entry)+(p.direction==='down'?9:-9),3.2,0,6.28); ctx.fill();
+    if(exitPx!==null){
+      const good=p.hit===1;
+      ctx.strokeStyle=p.hit===null?'#64748b':(good?'rgba(34,197,94,.9)':'rgba(239,68,68,.9)');
+      ctx.setLineDash([3,3]); ctx.beginPath();
+      ctx.moveTo(px,y(entry)); ctx.lineTo(xOf(exitT),y(exitPx)); ctx.stroke(); ctx.setLineDash([]);
+    }
   });
 }
 function render(){
   if(!state) return;
-  document.getElementById('upd').textContent='آخرین به‌روزرسانی: '+state.updated+' · افق '+state.horizon+' کندل · گام '+state.step_min+' دقیقه';
-  const s=state.stats;
-  const b=state.baselines['همیشه بالا'];
-  const cards=[['پیش‌بینی',s.predictions],['سنجیده',s.scored],['درست',s.hit_pct+'%'],
-               ['معامله',s.bets],['خالص',(s.net_bp>=0?'+':'')+s.net_bp+'bp'],
-               ['همیشه بالا',b? b.hit_pct+'%':'-'],['خطای مدل',s.failures]];
+  const s=state.stats||{}, ts=state.trade_stats||{};
+  document.getElementById('upd').textContent='آخرین به‌روزرسانی: '+state.updated+
+    ' · افق '+state.horizon+' کندل · گام '+state.step_min+' دقیقه'+
+    (s.last_error?(' · خطای مدل: '+s.last_error.slice(0,60)):'');
+  document.getElementById('prog').textContent='قدم '+Math.max(0,(state.cursor||0)-(state.candles.length? 29:0))+' از '+ (state.total_steps||0);
+  const cards=[['پیش‌بینی',s.predictions||0],['سنجیده',s.scored||0],['درست',(s.hit_pct||0)+'%'],
+    ['خالص تحلیل',((s.net_bp||0)>=0?'+':'')+(s.net_bp||0)+'bp'],
+    ['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
+    ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],['باز',ts.open||0]];
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  const rows=state.preds.slice(-25).reverse().map(p=>{
-    const cls=p.direction; const act=p.actual_bp===null?'—':(p.actual_bp>0?'+':'')+p.actual_bp+'bp';
+  const rows=(state.preds||[]).slice(-20).reverse().map(p=>{
+    const act=p.actual_bp===null?'—':((p.actual_bp>0?'+':'')+p.actual_bp+'bp');
     const ok=p.hit===null?'—':(p.hit?'✓':'✗');
-    return `<tr><td>${fmt(p.t)}</td><td class="${cls}">${p.direction}</td><td>${p.confidence.toFixed(2)}</td>
-    <td><span class="pill">${p.source}</span></td><td>${act}</td><td>${ok}</td><td>${p.reason||''}</td></tr>`;
-  }).join('');
+    return `<tr><td>${fmt(p.t)}</td><td class="${p.direction}">${p.direction}</td>
+      <td>${p.confidence.toFixed(2)}</td><td><span class="pill">${p.source}</span></td>
+      <td>${act}</td><td>${ok}</td><td>${p.reason||''}</td></tr>`;}).join('');
   document.getElementById('rows').innerHTML=rows||'<tr><td colspan="7" class="muted">هنوز تصمیمی نیست</td></tr>';
+  const trs=(state.trades||[]).slice(-20).reverse().map(t=>{
+    const cls=t.bp===null?'':(t.bp>0?'pos':'neg');
+    const res=t.hit===null?'باز':(t.hit?'برد':'باخت');
+    return `<tr><td>${fmt(t.t)}</td><td class="${t.side>0?'up':'down'}">${t.side>0?'خرید':'فروش'}</td>
+      <td>${t.entry}</td><td>${t.exit_px===null?'—':t.exit_px}</td>
+      <td class="${cls}">${t.bp===null?'—':((t.bp>0?'+':'')+t.bp)}</td><td>${res}</td>
+      <td>${t.confidence.toFixed(2)}</td><td>${t.reason||''}</td></tr>`;}).join('');
+  document.getElementById('trades').innerHTML=trs||'<tr><td colspan="8" class="muted">هنوز معامله‌ای نیست</td></tr>';
   draw();
 }
-async function tick(){
-  try{ const r=await fetch('api/state',{cache:'no-store'}); state=await r.json(); render(); }catch(e){}
+async function pull(){ try{const r=await fetch('api/state',{cache:'no-store'}); state=await r.json(); render();}catch(e){} }
+async function go(n){
+  if(busy) return; busy=true;
+  const btn=document.getElementById('b1'); btn.disabled=true; btn.textContent='…';
+  try{
+    const r=await fetch('api/next?n='+n,{cache:'no-store'});
+    state=await r.json(); render();
+  }catch(e){} finally{ busy=false; btn.disabled=false; btn.textContent='قدم بعد ▶'; }
 }
-tick(); setInterval(tick,2000);
+pull(); setInterval(pull,3000);
 window.addEventListener('resize',draw);
 </script></body></html>""".replace("SYMBOL", symbol)
 
 
-def serve(state_dir: Path, symbol: str, port: int = 8620, host: str = "0.0.0.0") -> None:
-    """سرور کوچک: صفحهٔ اپ + /api/state (از state.json خوانده می‌شود)."""
+def serve(
+    state_dir: Path,
+    symbol: str,
+    port: int = 8620,
+    host: str = "0.0.0.0",
+    studio: "Studio | None" = None,
+) -> None:
+    """سرور اپ: صفحه + /api/state + /api/next?n= (دکمهٔ «قدم بعد»).
+
+    اگر `studio` بدهی، دکمه‌ها واقعاً ایجنت را جلو می‌برند؛ وگرنه فقط state.json خوانده می‌شود.
+    """
     import http.server
     import socketserver
+    import threading
 
     root = Path(state_dir)
     html_page = app_html(symbol, port).encode("utf-8")
+    lock = threading.Lock()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -421,10 +557,35 @@ def serve(state_dir: Path, symbol: str, port: int = 8620, host: str = "0.0.0.0")
             if path in ("/", "/index.html"):
                 self._send(html_page, "text/html; charset=utf-8")
                 return
+            if path.startswith("/api/next") and studio is not None:
+                n = 1
+                if "?" in self.path:
+                    import urllib.parse
+
+                    qs = urllib.parse.parse_qs(self.path.split("?", 1)[1])
+                    try:
+                        n = int(qs.get("n", ["1"])[0])
+                    except ValueError:
+                        n = 1
+                with lock:
+                    if not studio.ensure_data():
+                        self._send(json.dumps({"error": "داده کافی نیست"}).encode(), "application/json")
+                        return
+                    if n <= 0:                       # تا آخر
+                        studio.walk()
+                    else:
+                        for _ in range(min(n, 500)):
+                            if studio.step() is None:
+                                break
+                    studio.save()
+                    body = json.dumps(studio.state(), ensure_ascii=False).encode()
+                self._send(body, "application/json; charset=utf-8")
+                return
             if path in ("/api/state", "/state.json"):
                 try:
-                    data = (root / "state.json").read_bytes()
-                except OSError:
+                    data = (json.dumps(studio.state(), ensure_ascii=False).encode()
+                            if studio is not None else (root / "state.json").read_bytes())
+                except (OSError, TypeError):
                     data = json.dumps({"candles": [], "preds": [], "stats": {},
                                        "baselines": {}, "repeated": 0}).encode()
                 self._send(data, "application/json; charset=utf-8")

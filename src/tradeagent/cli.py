@@ -93,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_studio.add_argument("--step-min", type=int, default=1, help="هر چند دقیقه یک تصمیم")
     p_studio.add_argument("--horizon", type=int, default=3, help="افق: چند کندل M1 بعد")
     p_studio.add_argument("--limit", type=int, default=None, help="حداکثر چند تصمیم (برای آزمون سریع)")
+    p_studio.add_argument("--warm", type=int, default=40, help="چند قدم قبل از بالا آوردن اپ برود")
+    p_studio.add_argument("--flat-bp", type=float, default=3.0, help="کمتر از این حرکت = خنثی")
+    p_studio.add_argument("--min-conf", type=float, default=0.0,
+                          help="کمترین اطمینان برای باز کردن معاملهٔ کاغذی")
     p_studio.add_argument("--no-llm", action="store_true", help="بدون مدل: فقط قاعدهٔ تکانه")
     p_studio.add_argument("--serve", action="store_true", help="اپ را روی پورت بالا بیاور")
     p_studio.add_argument("--port", type=int, default=8620)
@@ -391,17 +395,13 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     print(f"  کندل: {result['candles']} · تصمیم: {result['predictions']} · سنجیده: {result['scored']}")
     print(f"  دقت جهت: {result['hit_pct']}% · معامله: {result['bets']} · خالص: {result['net_bp']:+.1f}bp "
           f"· میانگین: {result['avg_bp']:+.2f}bp")
+    trades = studio.trade_stats()
+    print(f"  معاملات کاغذی: {trades['closed']} بسته · {trades['open']} باز · برد {trades['win_pct']}% · "
+          f"خالص {trades['net_bp']:+.1f}bp")
     if result.get("failures"):
         print(f"  خطای مدل: {result['failures']} (آخرین: {result['last_error']})")
     print(f"  وضعیت: {out_dir / 'state.json'}")
     print(f"  پیش‌بینی‌ها: {out_dir / 'predictions.jsonl'}")
-    if args.serve:
-        print("  اپ بالاست؛ Ctrl+C برای توقف.")
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            return 0
     return 0
 
 
