@@ -218,3 +218,24 @@ def test_stale_cap_in_a_local_config_cannot_stop_the_local_model(tmp_path: Path)
                          transport=lambda *a, **k: {"message": {"content": "{}"}})
     assert advisor.max_calls_per_hour == 0
     assert advisor.quota_label() == "بدون سقف"
+
+
+def test_decision_calls_are_short_and_keep_the_model_loaded(tmp_path: Path) -> None:
+    """۷۰۰ توکن روی CPU یعنی دقیقه‌ها انتظار؛ تصمیم کندلی یک JSON کوچک است."""
+    seen: dict[str, Any] = {}
+
+    def transport(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+        seen.update(payload)
+        return {"message": {"content": "{}"}}
+
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path), tmp_path / "calls.json", transport=transport)
+    advisor.chat([{"role": "user", "content": "x"}], num_predict=160)
+    assert seen["options"]["num_predict"] == 160
+    assert seen["options"]["num_ctx"] == advisor.ollama_num_ctx
+    assert seen["keep_alive"] == "30m"
+
+
+def test_default_budget_is_small(tmp_path: Path) -> None:
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path), tmp_path / "calls.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert advisor.num_predict <= 256

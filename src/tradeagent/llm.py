@@ -127,6 +127,8 @@ class LLMAdvisor:
         self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
         self.ollama_num_ctx = int(cfg.get("llm.ollama_num_ctx", 2048) or 2048)
         self.timeout = float(cfg.get("llm.timeout_s", 45))
+        # تصمیم کندلی یک JSON کوچک است؛ ۷۰۰ توکن روی CPU یعنی دقیقه‌ها انتظار
+        self.num_predict = max(32, int(cfg.get("llm.num_predict", 160)))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
         # ۰ یعنی بدون سقف: مدل محلی پول نمی‌گیرد، پس سقفِ ساعتی مدل ابری اینجا معنا ندارد.
         # عددِ کهنه در configs/local.toml هم نمی‌تواند ایجنت را بخواباند؛ سقف فقط با
@@ -306,7 +308,7 @@ class LLMAdvisor:
 
 
     # -- گفت‌وگوی آزاد برای ایجنت ابزاردار -----------------------------
-    def chat(self, messages: list[dict[str, str]]) -> str:
+    def chat(self, messages: list[dict[str, str]], num_predict: int | None = None) -> str:
         """پیام‌های آماده را بفرست و متن خام برگردان (برای حلقهٔ ابزار)."""
         ok, why = self.available()
         if not ok:
@@ -325,13 +327,17 @@ class LLMAdvisor:
                 "stream": False,
                 # قرارداد ایجنت JSON است؛ حالت json مدل را از متن آزاد دور می‌کند
                 "format": "json",
-                "options": {"temperature": 0.3, "num_predict": 700, "num_ctx": self.ollama_num_ctx},
+                "options": {"temperature": 0.3,
+                            "num_predict": int(num_predict or self.num_predict),
+                            "num_ctx": self.ollama_num_ctx},
                 "messages": messages,
+                # مدل را بعد از پاسخ نگه دار؛ بارگذاری دوبارهٔ ۷b روی CPU گران‌ترین بخش است
+                "keep_alive": "30m",
             }
             # ollama هنگام بارگذاری مدل 503 می‌دهد؛ چند بار با تأخیر تلاش کن
             last_exc: Exception | None = None
             data = None
-            for attempt, pause in enumerate((0, 3, 8, 15)):
+            for attempt, pause in enumerate((0, 3, 8)):   # بارگذاری سرد مدل طولانی است
                 if pause:
                     import time as _t
 

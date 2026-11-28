@@ -381,3 +381,31 @@ def test_trend_rule_needs_both_windows(tmp_path) -> None:
     assert "۵ دقیقه" in out["reason"] and "۱۵ دقیقه" in out["reason"]
     flat = trend_rule(candles, 100, flat_bp=1e9)
     assert flat["direction"] == "flat"
+
+
+def test_state_says_when_the_model_is_thinking(tmp_path) -> None:
+    """کاربر باید ببیند مدل مشغول است، نه اینکه صفحه مرده به‌نظر برسد."""
+    import time as _time
+
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=2)
+    assert studio.state()["thinking"] is None
+    studio.thinking_since = _time.time() - 12
+    studio.thinking_i = 7
+    th = studio.state()["thinking"]
+    assert th["i"] == 7 and 11 <= th["elapsed_s"] <= 20
+
+
+def test_ctrl_c_is_a_clean_exit() -> None:
+    from tradeagent import cli
+
+    def boom(_cfg, _args):
+        raise KeyboardInterrupt
+
+    original = cli.cmd_studio
+    cli.cmd_studio = boom
+    try:
+        assert cli.main(["studio"]) == 0
+    finally:
+        cli.cmd_studio = original

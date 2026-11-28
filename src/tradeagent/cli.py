@@ -459,8 +459,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
             print(f"  مدل: آماده است · {advisor.ollama_model} · سقف فراخوانی: {advisor.quota_label()}"
                   + (f" {note}" if note else ""))
 
-            def chat(messages):  # noqa: ANN001, ANN202
-                return advisor.chat(messages)
+            def chat(messages, num_predict=None):  # noqa: ANN001, ANN202
+                return advisor.chat(messages, num_predict)
         else:
             print(f"  مدل جواب نداد: {why[:120]}")
             print("  ─ با قاعدهٔ تکانه جلو می‌رود و در جدول، منبع هر تصمیم «rule» نوشته می‌شود.")
@@ -482,11 +482,16 @@ def cmd_studio(cfg: Any, args: Any) -> int:
               f"خالص {info['net_bp']:+.0f}bp · ~{eta // 60} دقیقه مانده", flush=True)
 
     if args.serve:
-        # چند قدم اول را برو تا اپ از همان اول چارت و تصمیم داشته باشد
-        warm = max(1, int(args.warm))
-        studio.walk(limit=warm)
+        # اول اپ بالا بیاید، بعد گرم‌کردن؛ وگرنه یک فراخوانی کندِ مدل، صفحه را قفل می‌کند
+        warm = max(0, int(args.warm))
+        ready = threading.Event()
+
+        def _ready(port: int) -> None:
+            ready.set()
+
         threading.Thread(target=serve, args=(out_dir, symbol, args.port),
-                         kwargs={"studio": studio}, daemon=True).start()
+                         kwargs={"studio": studio, "on_ready": _ready}, daemon=True).start()
+        ready.wait(5)
         url = f"http://127.0.0.1:{args.port}"
         print("  " + "─" * 40)
         print(f"  اپ آماده است: {url}")
@@ -502,13 +507,24 @@ def cmd_studio(cfg: Any, args: Any) -> int:
                 webbrowser.open(url)
             except Exception:  # noqa: BLE001
                 pass
+        if warm:
+            def _warm_up() -> None:
+                with studio.lock:
+                    if chat is not None:
+                        print(f"  مدل در حال آماده‌سازی روی {warm} کندل اول است "
+                              "(اولین پاسخ ممکن است ۳۰–۹۰ ثانیه طول بکشد)…", flush=True)
+                    studio.walk(limit=warm)
+                    print(f"  آماده‌سازی تمام شد: {len(studio.preds)} تصمیم.", flush=True)
+
+            threading.Thread(target=_warm_up, daemon=True).start()
+
         if not args.auto:
             print("  تا وقتی این پنجره باز است اپ کار می‌کند (Ctrl+C برای بستن).")
             try:
                 while True:
                     time.sleep(3600)
             except KeyboardInterrupt:
-                print("  بسته شد.")
+                print("\n  بسته شد.")
                 return 0
 
     result = studio.walk(limit=args.limit, progress=progress)
@@ -744,7 +760,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if handler is None:  # pragma: no cover
         parser.error(f"دستور ناشناخته: {args.cmd}")
         return 2
-    return handler(cfg, args)
+    try:
+        return handler(cfg, args)
+    except KeyboardInterrupt:                 # Ctrl+C وسط کار مدل: خروج تمیز، بدون traceback
+        print("\n  بسته شد.")
+        return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

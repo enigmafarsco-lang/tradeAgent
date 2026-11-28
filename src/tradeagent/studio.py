@@ -13,8 +13,9 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -242,6 +243,9 @@ class Studio:
         self._full_write = False
         self.trades: list[Trade] = []
         self.started = time.time()
+        self.lock = threading.RLock()          # یک قدم در هر لحظه، حتی از دو جای مختلف
+        self.thinking_since: float | None = None
+        self.thinking_i: int | None = None
 
     # -- کش -------------------------------------------------------------
     def _cache_path(self) -> Path:
@@ -290,11 +294,19 @@ class Studio:
         prompt = PREDICT_PROMPT.format(
             horizon=self.horizon, digest=json.dumps(digest, ensure_ascii=False)
         )
+        self.thinking_since = time.time()
+        self.thinking_i = i
         try:
-            reply = self.chat([
+            messages = [
                 {"role": "system", "content": "فقط JSON بده. همهٔ متن‌ها فارسی باشند."},
                 {"role": "user", "content": prompt},
-            ])
+            ]
+            try:
+                reply = self.chat(messages, num_predict=160)
+            except TypeError as exc:            # چتِ ساده که بودجه نمی‌فهمد
+                if "num_predict" not in str(exc):
+                    raise
+                reply = self.chat(messages)
             parsed = _parse_reply(reply, self.horizon)
             if not parsed:
                 raise ValueError("پاسخ مدل JSON معتبر نبود")
@@ -325,6 +337,9 @@ class Studio:
             out = momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"
             return out
+        finally:
+            self.thinking_since = None
+            self.thinking_i = None
 
     # -- امتیاز ----------------------------------------------------------
     def _score_ready(self, upto_i: int) -> None:
@@ -677,6 +692,9 @@ class Studio:
             "coverage": self.coverage(),
             "cursor": self._cursor,
             "step_index": len(self.preds),
+            "thinking": (None if self.thinking_since is None else
+                         {"i": self.thinking_i,
+                          "elapsed_s": round(time.time() - self.thinking_since, 1)}),
             "total_steps": max(0, len(self.candles) - self.horizon - (self.window - 1)),
             "baselines": self._baselines(),
         }
@@ -945,6 +963,13 @@ function render(force){
       what.textContent='هنوز تصمیمی گرفته نشده؛ «قدم بعد» را بزن.';
     }
   }
+  const th=state.thinking, banner=document.getElementById('alert');
+  if(th && banner){
+    banner.style.display='block';
+    banner.style.background='#1e3a8a';
+    banner.innerHTML='🧠 مدل روی کندل '+(th.i)+' فکر می‌کند… '+th.elapsed_s+' ثانیه. '+
+      'روی CPU هر تصمیم می‌تواند ۲۰–۹۰ ثانیه بگیرد؛ صبر کن، صفحه را نبند.';
+  }
   const alert=document.getElementById('alert');
   if(alert){
     if(s.model_down || (s.failures||0)>0){
@@ -957,7 +982,7 @@ function render(force){
       alert.style.background='#92400e';
       alert.innerHTML='⏳ سقف فراخوانی مدل در ساعت پر شده ('+(s.quota_hits)+' بار) — تصمیم‌ها با قاعده گرفته می‌شوند. '+
         'برداشتن سقف: <code>./scripts/studio.sh --serve --max-calls-per-hour 0</code>';
-    } else { alert.style.display='none'; }
+    } else if(!th) { alert.style.display='none'; }
   }
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   const rows=(state.preds||[]).slice(-20).reverse().map(p=>{
@@ -1048,7 +1073,7 @@ def serve(
                     n = int(qs.get("n", ["1"])[0])
                 except ValueError:
                     n = 1
-                with lock:
+                with lock, studio.lock:      # قدم‌ها با گرم‌کردن پس‌زمینه قاطی نشوند
                     if not studio.ensure_data():
                         self._send(json.dumps({"error": "داده کافی نیست"}).encode(), "application/json")
                         return
@@ -1083,7 +1108,7 @@ def serve(
                         n = int(qs.get("n", ["1"])[0])
                     except ValueError:
                         n = 1
-                with lock:
+                with lock, studio.lock:      # قدم‌ها با گرم‌کردن پس‌زمینه قاطی نشوند
                     if not studio.ensure_data():
                         self._send(json.dumps({"error": "داده کافی نیست"}).encode(), "application/json")
                         return
