@@ -75,6 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
                           help="پیش‌بینی‌کنندهٔ ساختگی/قاعده‌ای (تست بدون مدل)")
     p_replay.add_argument("--model", default=None, help="نام مدل ollama (پیش‌فرض: llm.ollama_model)")
 
+    p_lab = sub.add_parser("lab", help="آزمایشگاه مدل آفلاین: تیک → کندل M1 → ویژگی → سنجش مدل‌ها + داشبورد")
+    p_lab.add_argument("--symbol", default=None)
+    p_lab.add_argument("--horizon", type=int, default=3, help="چند کندل M1 بعد پیش‌بینی شود (۲ تا ۳)")
+    p_lab.add_argument("--flat-bp", type=float, default=3.0, help="کمتر از این حرکت = خنثی")
+    p_lab.add_argument("--folds", type=int, default=5)
+    p_lab.add_argument("--cost-bp", type=float, default=1.0)
+    p_lab.add_argument("--epochs", type=int, default=250)
+    p_lab.add_argument("--data", default=None, help="پوشهٔ داده (پیش‌فرض: مسیر harvester)")
+    p_lab.add_argument("--out", default="var/lab")
+    p_lab.add_argument("--serve", action="store_true", help="بعد از ساخت، داشبورد را روی پورت بالا بیاور")
+    p_lab.add_argument("--port", type=int, default=8610)
+
     p_pub = sub.add_parser("publish-test", help="تست کامیت/پوش گزارش‌ها")
     p_pub.add_argument("--write", action="store_true", help="کامیت واقعی (پیش‌فرض: فقط بررسی کلون)")
 
@@ -186,6 +198,39 @@ def cmd_ticks(cfg: Config, args: argparse.Namespace) -> int:
     print(f"  قیمت: {info['low']} … {info['high']}")
     for day in info["days"]:
         print(f"    {day['file']}: {day['ticks']:,} تیک · {day['low']} … {day['high']}")
+    return 0
+
+
+def cmd_lab(cfg: Any, args: Any) -> int:
+    from .lab import run as run_lab
+    from .loop import resolve_harvester_dir
+
+    symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+    if args.data:
+        root = Path(args.data).expanduser()
+    else:
+        root = resolve_harvester_dir(cfg.path("data.harvester_dir", "~/mt5/MQL5/Files/harvester"))
+    print(f"═══ آزمایشگاه مدل: {symbol} · افق {args.horizon} کندل M1 ═══")
+    print(f"  تیک‌ها: {root / symbol}")
+    data = run_lab(root, symbol, horizon=args.horizon, flat_bp=args.flat_bp, n_folds=args.folds,
+                   cost_bp=args.cost_bp, epochs=args.epochs, out_dir=cfg.path(args.out, args.out),
+                   serve=False, port=args.port)
+    if not data.get("ok"):
+        print("  " + str(data.get("error")))
+        return 1
+    print(f"  کندل M1: {data['candles_n']} · نمونه: {data['samples']} · فولد: {data['folds_n']}")
+    for row in data["summary"]:
+        print(f"    {row['name']:<18} دقت {row['accuracy'] * 100:5.1f}%  "
+              f"معامله {row['bets']:4d}  برد {row['win_pct']:5.1f}%  خالص {row['net_bp']:+8.1f}bp  "
+              f"میانگین {row['avg_bp']:+.2f}bp")
+    if data.get("importance"):
+        top = ", ".join(i["feature"] for i in data["importance"][:6])
+        print(f"  مهم‌ترین ویژگی‌ها: {top}")
+    print(f"  گزارش: {data['html_path']}")
+    if args.serve:
+        from .lab import serve_lab
+
+        serve_lab(Path(data["html_path"]).parent, port=args.port)
     return 0
 
 
@@ -396,6 +441,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "publish-test": cmd_publish_test,
         "ticks": cmd_ticks,
         "replay": cmd_replay,
+        "lab": cmd_lab,
     }
     handler = handlers.get(args.cmd)
     if handler is None:  # pragma: no cover
