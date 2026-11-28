@@ -198,7 +198,8 @@ def test_local_model_has_no_hourly_quota_by_default(tmp_path: Path) -> None:
 def test_quota_is_an_explicit_error_with_a_way_out(tmp_path: Path) -> None:
     from tradeagent.llm import QuotaExceeded
 
-    advisor = LLMAdvisor(_ollama_cfg(tmp_path, max_calls_per_hour=2), tmp_path / "calls.json",
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path, max_calls_per_hour=2, quota_strict=True),
+                         tmp_path / "calls.json",
                          transport=lambda *a, **k: {"message": {"content": "{}"}})
     advisor.chat([{"role": "user", "content": "x"}])
     advisor.chat([{"role": "user", "content": "x"}])
@@ -209,3 +210,11 @@ def test_quota_is_an_explicit_error_with_a_way_out(tmp_path: Path) -> None:
         assert getattr(exc, "quota", False)
     else:  # pragma: no cover
         raise AssertionError("باید QuotaExceeded می‌داد")
+
+
+def test_stale_cap_in_a_local_config_cannot_stop_the_local_model(tmp_path: Path) -> None:
+    """configs/local.toml کاربر از الگوی قدیمی ۱۲ دارد؛ نباید ایجنت را بخواباند."""
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path, max_calls_per_hour=12), tmp_path / "calls.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert advisor.max_calls_per_hour == 0
+    assert advisor.quota_label() == "بدون سقف"

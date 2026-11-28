@@ -128,11 +128,18 @@ class LLMAdvisor:
         self.ollama_num_ctx = int(cfg.get("llm.ollama_num_ctx", 2048) or 2048)
         self.timeout = float(cfg.get("llm.timeout_s", 45))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
-        # ۰ یعنی بدون سقف: مدل محلی پول نمی‌گیرد، پس سقفِ ساعت‌یِ مدل ابری اینجا معنا ندارد
-        self.max_calls_per_hour = max(0, int(cfg.get("llm.max_calls_per_hour", 0)))
-        if self.provider != "ollama" and self.max_calls_per_hour == 0:
-            # مدل ابری سهمیه دارد؛ بی‌سقف گذاشتنش به ۴۲۹ می‌خورد
-            self.max_calls_per_hour = 60
+        # ۰ یعنی بدون سقف: مدل محلی پول نمی‌گیرد، پس سقفِ ساعتی مدل ابری اینجا معنا ندارد.
+        # عددِ کهنه در configs/local.toml هم نمی‌تواند ایجنت را بخواباند؛ سقف فقط با
+        # llm.quota_strict (فلگ --max-calls-per-hour) واقعاً اعمال می‌شود.
+        configured = max(0, int(cfg.get("llm.max_calls_per_hour", 0)))
+        strict = bool(cfg.get("llm.quota_strict", False))
+        self.quota_note = ""
+        if self.provider == "ollama" and not strict:
+            self.max_calls_per_hour = 0
+            if configured:
+                self.quota_note = (f"(سقف {configured} در کانفیگ نادیده گرفته شد؛ مدل محلی سقف ندارد)")
+        else:
+            self.max_calls_per_hour = configured if (configured or strict) else 60
         self.key_env = str(cfg.get("llm.gemini_api_key_env", "GEMINI_API_KEY"))
 
     # -- وضعیت ---------------------------------------------------------

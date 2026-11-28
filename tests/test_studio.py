@@ -65,6 +65,18 @@ def test_studio_uses_the_model_when_it_answers(tmp_path) -> None:
     assert studio2.preds[-1].source == "cache"
 
 
+def test_review_files_land_where_git_can_see_them(tmp_path) -> None:
+    """var/ در .gitignore است؛ گزارش باید در reports/studio نوشته شود تا قابل پوش باشد."""
+    logs = make_logs(tmp_path)
+    report_dir = tmp_path / "reports" / "studio"
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "var"/"studio", chat=None,
+                    flat_bp=0.0, horizon=2, report_dir=report_dir)
+    studio.walk(limit=4)
+    for name in ("review.md", "review.csv", "review.json"):
+        assert (report_dir / name).exists(), name
+    assert "دقت" in (report_dir / "review.md").read_text(encoding="utf-8")
+
+
 def test_quota_does_not_trip_the_circuit_breaker(tmp_path) -> None:
     """سقف فراخوانی خطای مدل نیست: مدل نباید «قطع» شود، فقط صبر می‌کند."""
     from tradeagent.llm import QuotaExceeded

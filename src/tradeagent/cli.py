@@ -379,6 +379,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     root = Path(args.data).expanduser() if args.data else Path("").resolve()
     out_dir = cfg.path(args.out, args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # var/ در .gitignore است؛ گزارش‌ها باید جایی بروند که `git status` ببیندشان
+    report_dir = cfg.root / "reports" / "studio"
 
     if getattr(args, "doctor", False):
         from .llm import LLMAdvisor
@@ -438,6 +440,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
             cfg.set("llm.ollama_num_ctx", args.num_ctx)
         if getattr(args, "max_calls_per_hour", None) is not None:
             cfg.set("llm.max_calls_per_hour", args.max_calls_per_hour)
+            cfg.set("llm.quota_strict", True)     # فقط وقتی خودش خواسته سقف اعمال می‌شود
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = advisor.preflight()
         if not ok and not args.ollama_url:
@@ -452,7 +455,9 @@ def cmd_studio(cfg: Any, args: Any) -> int:
                     print(f"  مدل روی {alt} جواب داد؛ همان استفاده می‌شود.")
                     break
         if ok:
-            print(f"  مدل: آماده است · {advisor.ollama_model} · سقف فراخوانی: {advisor.quota_label()}")
+            note = getattr(advisor, "quota_note", "")
+            print(f"  مدل: آماده است · {advisor.ollama_model} · سقف فراخوانی: {advisor.quota_label()}"
+                  + (f" {note}" if note else ""))
 
             def chat(messages):  # noqa: ANN001, ANN202
                 return advisor.chat(messages)
@@ -464,7 +469,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
 
     studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min,
                     horizon=args.horizon, flat_bp=args.flat_bp, min_conf=args.min_conf,
-                    extra_dirs=logs, skip_frozen=not args.no_skip_frozen)
+                    extra_dirs=logs, skip_frozen=not args.no_skip_frozen,
+                    report_dir=report_dir)
     if args.rule == "trend" and chat is None:
         from .studio import trend_rule
 
@@ -486,6 +492,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
         print(f"  اپ آماده است: {url}")
         print("  دکمه‌های «قدم بعد / ۵ قدم / تا آخر» ایجنت را جلو می‌برند.")
         print(f"  گزارش بازبینی: {url}/review.md  (دکمهٔ 📄 بالای چارت)")
+        print(f"  برای پوش: {report_dir / 'review.md'}  ·  "
+              f"git add reports/studio && git commit -m review && git push")
         print("  " + "─" * 40)
         if not args.no_open:
             try:
@@ -515,7 +523,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
           f"خالص {trades['net_bp']:+.1f}bp · هزینهٔ پرداختی {trades['cost_paid_bp']:.0f}bp")
     if result.get("failures"):
         print(f"  خطای مدل: {result['failures']} (آخرین: {result['last_error']})")
-    print(f"  گزارش بازبینی (همین را بفرست): {out_dir / 'review.md'}")
+    print(f"  گزارش بازبینی (همین را بفرست): {report_dir / 'review.md'}")
     print(f"  نسخهٔ CSV/JSON: {out_dir / 'review.csv'} · {out_dir / 'review.json'}")
     print(f"  وضعیت: {out_dir / 'state.json'}")
     print(f"  پیش‌بینی‌ها: {out_dir / 'predictions.jsonl'}")

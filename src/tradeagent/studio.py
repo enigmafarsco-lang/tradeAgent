@@ -210,10 +210,13 @@ class Studio:
         min_conf: float = 0.0,
         extra_dirs: Sequence[Path] = (),
         skip_frozen: bool = True,
+        report_dir: "Path | str | None" = None,
     ) -> None:
         self.root = Path(root)
         self.symbol = symbol
         self.out = Path(out_dir)
+        # گزارش‌ها جایی می‌روند که گیت می‌بیند؛ var/ در .gitignore است و پوش نمی‌شود
+        self.report_dir = Path(report_dir) if report_dir else self.out
         self.chat = chat
         self.step_min = max(1, int(step_min))
         self.horizon = max(1, int(horizon))
@@ -710,7 +713,8 @@ class Studio:
             review = self.review()
             (self.out / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=2),
                                                    encoding="utf-8")
-            (self.out / "review.md").write_text(self.review_markdown(), encoding="utf-8")
+            review_md = self.review_markdown()
+            (self.out / "review.md").write_text(review_md, encoding="utf-8")
             with (self.out / "review.csv").open("w", encoding="utf-8") as fh:
                 fh.write("time_utc,direction,confidence,entry,actual_bp,hit,source,reason\n")
                 for p in self.preds:
@@ -721,6 +725,13 @@ class Studio:
                         "" if p.hit is None else str(p.hit), p.source,
                         '"' + (p.reason or "").replace('"', "'") + '"',
                     ]) + "\n")
+            if self.report_dir != self.out:
+                self.report_dir.mkdir(parents=True, exist_ok=True)
+                (self.report_dir / "review.md").write_text(review_md, encoding="utf-8")
+                (self.report_dir / "review.json").write_text(
+                    json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+                (self.report_dir / "review.csv").write_text(
+                    (self.out / "review.csv").read_text(encoding="utf-8"), encoding="utf-8")
             self._save_cache()
         except OSError as exc:
             LOG.warning("ذخیرهٔ وضعیت استودیو نشد: %s", exc)
