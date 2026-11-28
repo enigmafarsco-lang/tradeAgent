@@ -347,7 +347,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     """ایجنت کندل‌به‌کندل روی داده جلو می‌رود و اپ زنده نشان می‌دهد."""
     import threading
 
-    from .lab import discover_tick_dirs, find_tick_files
+    from .lab import discover_tick_dirs, find_tick_files, probe_tick_file
     from .llm import LLMAdvisor
     from .studio import Studio, serve
 
@@ -359,8 +359,13 @@ def cmd_studio(cfg: Any, args: Any) -> int:
     print(f"═══ استودیو: {symbol} · گام {args.step_min} دقیقه · افق {args.horizon} کندل ═══")
     found = find_tick_files(root, symbol)
     logs = [d for d in discover_tick_dirs(symbol, [root] if args.data else []) if str(d) != str(root)]
-    print(f"  داده: {root if found else (logs[0] if logs else root)}"
-          f"{'' if found else ' (از logs)'}")
+    if not found and logs:
+        # داده در پوشهٔ logs است؛ همان‌جا ریشهٔ داده شود
+        root, found = logs[0], find_tick_files(logs[0], symbol)
+    print(f"  داده: {root} · {len(found)} فایل ({probe_tick_file(found[0]).get('kind') if found else '?'})")
+    if not found:
+        print("  فایل تیکی پیدا نشد؛ با --data مسیر logs را بده.")
+        return 1
 
     chat = None
     if not args.no_llm:

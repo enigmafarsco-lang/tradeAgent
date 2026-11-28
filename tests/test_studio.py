@@ -150,3 +150,12 @@ def test_next_button_endpoint_advances_the_agent(tmp_path) -> None:
     assert "trade_stats" in data and "preds" in data
     page = urllib.request.urlopen("http://127.0.0.1:8632/").read().decode()
     assert "قدم بعد" in page and "api/next" in page and "معاملات کاغذی" in page
+
+
+def test_studio_finds_the_logs_folder_beside_the_repo(tmp_path) -> None:
+    """داده در <repo>/logs است، نه در harvester؛ استودیو خودش باید پیدایش کند."""
+    logs = make_logs(tmp_path)
+    assert logs.name == "logs"
+    studio = Studio(tmp_path, "XAUUSD_i", tmp_path / "st", chat=None)
+    assert studio.ensure_data() is True
+    assert len(studio.candles) > 100

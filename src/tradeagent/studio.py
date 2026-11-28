@@ -133,6 +133,7 @@ class Studio:
         flat_bp: float = 3.0,
         cost_bp: float = 1.0,
         min_conf: float = 0.0,
+        extra_dirs: Sequence[Path] = (),
     ) -> None:
         self.root = Path(root)
         self.symbol = symbol
@@ -144,6 +145,7 @@ class Studio:
         self.flat_bp = flat_bp
         self.cost_bp = cost_bp
         self.min_conf = min_conf
+        self.extra_dirs = [Path(d) for d in extra_dirs]
         self.cache: dict[str, Any] = self._load_cache()
         self.candles: list[Candle] = []
         self.preds: list[Prediction] = []
@@ -244,7 +246,14 @@ class Studio:
     # -- یک قدم ---------------------------------------------------------
     def ensure_data(self) -> bool:
         if not self.candles:
-            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache")
+            from .lab import discover_tick_dirs, find_tick_files
+
+            extra = list(self.extra_dirs)
+            if not find_tick_files(self.root, self.symbol):     # داده کنار مخزن نیست؛ در logs بگرد
+                extra += [d for d in discover_tick_dirs(self.symbol, [self.root])
+                          if str(d) != str(self.root)]
+            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache",
+                                        extra_dirs=extra)
         return len(self.candles) >= self.window + self.horizon + 5
 
     def step(self) -> dict[str, Any] | None:
@@ -310,7 +319,8 @@ class Studio:
              start_i: int | None = None,
              progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         if not self.candles:
-            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache")
+            self.candles = load_candles(self.root, self.symbol, cache_dir=self.out / "cache",
+                                        extra_dirs=self.extra_dirs)
         n = len(self.candles)
         if n < self.window + self.horizon + 5:
             return {"ok": False, "error": f"کندل کافی نیست: {n}"}
