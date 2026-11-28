@@ -204,6 +204,12 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
                     "analysis": f"پیش‌بینی ساختگی: {direction}"}
     else:
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
+        ok, why = advisor.preflight()
+        if not ok:
+            print(f"  مدل جواب نمی‌دهد: {why}")
+            print("  راه‌حل: ollama serve (یا systemctl --user restart ollama) و مدل را از حافظه بیرون بکش")
+            return 1
+        print(f"  مدل آماده است: {why}")
 
         def predictor(bars, horizon):  # noqa: ANN001, ANN202
             return model_predict(advisor.chat, bars, horizon)

@@ -99,3 +99,35 @@ def test_a_dead_model_does_not_kill_the_replay(tmp_path) -> None:
     assert stats["failures"] == 2
     assert "503" in stats["last_error"]
     assert stats["steps"] >= 1
+
+
+def test_http_error_keeps_the_server_message() -> None:
+    """503 بی‌توضیح بی‌فایده است؛ ollama دلیلش را در بدنه می‌فرستد."""
+    import urllib.error
+
+    from tradeagent.llm import http_post_json
+
+    class FakeError(urllib.error.HTTPError):
+        def __init__(self) -> None:  # noqa: D401
+            super().__init__("u", 503, "Service Unavailable", {}, None)
+
+        def read(self):  # noqa: ANN201
+            return b'{"error":"model requires more system memory"}'
+
+    import tradeagent.llm as llm_mod
+
+    original = llm_mod.urllib.request.urlopen
+
+    def boom(*a, **k):  # noqa: ANN002, ANN003
+        raise FakeError()
+
+    llm_mod.urllib.request.urlopen = boom
+    try:
+        try:
+            http_post_json("http://x/api/chat", {}, {}, 1.0)
+        except RuntimeError as exc:
+            assert "503" in str(exc) and "system memory" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("باید خطا بدهد")
+    finally:
+        llm_mod.urllib.request.urlopen = original

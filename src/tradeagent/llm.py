@@ -72,8 +72,16 @@ class LLMResult:
 def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **headers}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - آدرس از پیکربندی می‌آید
-        raw = resp.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - آدرس از پیکربندی می‌آید
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        # بدنهٔ پاسخ را نگه دار: ollama دلیل واقعی را همین‌جا می‌نویسد
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        raise RuntimeError(f"HTTP {exc.code}: {detail or exc.reason}") from exc
     return json.loads(raw) if raw else {}
 
 
@@ -143,6 +151,32 @@ class LLMAdvisor:
         if cycle % self.every_cycles != 0:
             return False
         return self.calls_last_hour() < self.max_calls_per_hour
+
+    # -- پیش‌پرواز ------------------------------------------------------
+    def preflight(self) -> tuple[bool, str]:
+        """آیا مدل واقعاً جواب می‌دهد؟ (تگ‌ها بودنش اثبات نیست)
+
+        ollama وقتی مدل بالا نمی‌آید 503 می‌دهد و دلیلش را در بدنهٔ پاسخ می‌نویسد.
+        """
+        if self.provider != "ollama":
+            ok, why = self.available()
+            return ok, why
+        try:
+            data = self.transport(
+                f"{self.ollama_url}/api/chat",
+                {
+                    "model": self.ollama_model,
+                    "stream": False,
+                    "options": {"num_predict": 8},
+                    "messages": [{"role": "user", "content": "بگو: آماده"}],
+                },
+                {},
+                max(30.0, self.timeout),
+            )
+            text = str((data.get("message") or {}).get("content") or "").strip()
+            return True, text[:60] or "ok"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"[:400]
 
     # -- فراخوانی ------------------------------------------------------
     def _build_prompt(self, context: dict[str, Any]) -> str:
