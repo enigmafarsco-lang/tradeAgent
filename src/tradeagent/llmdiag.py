@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import urllib.error
@@ -32,7 +33,8 @@ def _request(url: str, payload: dict[str, Any] | None = None, timeout: float = 1
         method="POST" if data is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - آدرس محلی
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 - آدرس محلی
             return resp.status, resp.read().decode("utf-8", errors="replace")[:600]
     except urllib.error.HTTPError as exc:
         try:
@@ -166,6 +168,13 @@ def diagnose(base_url: str, model: str) -> list[Probe]:
     if "نصب نیست" in logs or "No entries" in logs or not logs.strip():
         logs = _run(["journalctl", "-u", "ollama", "-n", "15", "--no-pager"])
     probes.append(Probe("لاگ سرویس ollama", bool(logs.strip()) and "No entries" not in logs, logs))
+    proxies = {k: v for k, v in os.environ.items()
+               if k.lower() in ("http_proxy", "https_proxy", "all_proxy", "no_proxy") and v}
+    probes.append(Probe(
+        "پروکسی محیط", not proxies,
+        ("; ".join(f"{k}={v}" for k, v in proxies.items())
+         + "  ← درخواست‌های محلی را می‌دزدد؛ حالا دور زده می‌شود" if proxies else "تنظیم نشده"),
+    ))
     probes.append(Probe("چه کسی روی پورت گوش می‌دهد", True, listeners()))
     probes.extend(gpu_report())
     return probes
@@ -214,8 +223,12 @@ def _url_verdict(probes: list[Probe], model: str) -> str:
         note = ""
         if ps and "CPU" in ps.detail:
             note = " (مدل روی CPU اجرا می‌شود؛ کند است ولی کار می‌کند)"
+        proxy = next((p for p in probes if p.name.startswith("پروکسی محیط")), None)
+        extra = ""
+        if proxy and not proxy.ok:
+            extra = " (پروکسی سیستم دلیل ۵۰۳ روی 127.0.0.1 بود؛ حالا نادیده گرفته می‌شود)"
         return (f"مدل روی {working} جواب می‌دهد؛ استودیو را با «--ollama-url {working}» اجرا کن"
-                f" یا این آدرس را در configs بگذار.{note}")
+                f" یا این آدرس را در configs بگذار.{note}{extra}")
     gen = next((p for p in probes if p.name.startswith("تولید متن")), None)
     if gen and gen.ok:
         return "مدل سالم است؛ استودیو باید با مدل کار کند."

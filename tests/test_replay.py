@@ -116,12 +116,18 @@ def test_http_error_keeps_the_server_message() -> None:
 
     import tradeagent.llm as llm_mod
 
-    original = llm_mod.urllib.request.urlopen
+    class FakeOpener:
+        def open(self, *a, **k):  # noqa: ANN002, ANN003
+            raise FakeError()
 
-    def boom(*a, **k):  # noqa: ANN002, ANN003
-        raise FakeError()
+        def __enter__(self):  # pragma: no cover
+            return self
 
-    llm_mod.urllib.request.urlopen = boom
+        def __exit__(self, *a):  # pragma: no cover
+            return False
+
+    original = llm_mod.local_opener
+    llm_mod.local_opener = lambda: FakeOpener()
     try:
         try:
             http_post_json("http://x/api/chat", {}, {}, 1.0)
@@ -130,7 +136,7 @@ def test_http_error_keeps_the_server_message() -> None:
         else:  # pragma: no cover
             raise AssertionError("باید خطا بدهد")
     finally:
-        llm_mod.urllib.request.urlopen = original
+        llm_mod.local_opener = original
 
 
 def test_replay_cli_retries_the_model_before_giving_up() -> None:

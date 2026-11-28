@@ -106,6 +106,27 @@ def test_momentum_rule_speaks_persian(tmp_path) -> None:
     assert "bp" in out["reason"] and any("\u0600" <= ch <= "\u06ff" for ch in out["reason"])
 
 
+
+
+def _serve_in_thread(studio, directory):
+    """سرور روی پورت آزاد بالا می‌آید و پورت واقعی را برمی‌گرداند."""
+    import threading
+
+    from tradeagent.studio import serve
+
+    ready = threading.Event()
+    holder = {}
+
+    def on_ready(port):
+        holder["port"] = port
+        ready.set()
+
+    threading.Thread(target=serve, args=(directory, studio.symbol, 0),
+                     kwargs={"studio": studio, "on_ready": on_ready}, daemon=True).start()
+    assert ready.wait(5), "سرور بالا نیامد"
+    return holder["port"]
+
+
 def test_step_cursor_moves_and_paper_trades_open_and_close(tmp_path) -> None:
     logs = make_logs(tmp_path)
     studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, step_min=1, horizon=3, flat_bp=0.0)
@@ -143,14 +164,12 @@ def test_next_button_endpoint_advances_the_agent(tmp_path) -> None:
     logs = make_logs(tmp_path)
     studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None)
     studio.walk(limit=5)
-    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8632),
-                     kwargs={"studio": studio}, daemon=True).start()
-    time.sleep(1.2)
+    port = _serve_in_thread(studio, tmp_path / "st")
     before = studio.stats()["predictions"]
-    data = json.load(urllib.request.urlopen("http://127.0.0.1:8632/api/next?n=3"))
+    data = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/next?n=3"))
     assert data["stats"]["predictions"] == before + 3
     assert "trade_stats" in data and "preds" in data
-    page = urllib.request.urlopen("http://127.0.0.1:8632/").read().decode()
+    page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
     assert "قدم بعد" in page and "api/next" in page and "معاملات کاغذی" in page
 
 
@@ -229,19 +248,17 @@ def test_navigation_endpoints_goto_prev_and_reset(tmp_path) -> None:
     logs = make_logs(tmp_path)
     studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
     studio.walk(limit=30)
-    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8652),
-                     kwargs={"studio": studio}, daemon=True).start()
-    time.sleep(1.2)
+    port = _serve_in_thread(studio, tmp_path / "st")
 
     def call(q):
-        return json.load(urllib.request.urlopen(f"http://127.0.0.1:8652/api/{q}"))
+        return json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/{q}"))
 
     assert call("goto?n=10")["step_index"] == 10
     assert call("next?n=1")["step_index"] == 11
     assert call("prev")["step_index"] == 10
     back = call("reset")
     assert back["step_index"] == 0 and back["cursor"] is None
-    assert "seek" in app_html("XAUUSD_i", 8652)
+    assert "seek" in app_html("XAUUSD_i", port)
 
 
 def test_review_markdown_says_what_was_tested(tmp_path) -> None:
@@ -269,12 +286,10 @@ def test_review_file_is_served_for_download(tmp_path) -> None:
     logs = make_logs(tmp_path)
     studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
     studio.walk(limit=12)
-    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8653),
-                     kwargs={"studio": studio}, daemon=True).start()
-    time.sleep(1.2)
-    body = urllib.request.urlopen("http://127.0.0.1:8653/review.md").read().decode()
+    port = _serve_in_thread(studio, tmp_path / "st")
+    body = urllib.request.urlopen(f"http://127.0.0.1:{port}/review.md").read().decode()
     assert "گزارش استودیو" in body and "دقت کل" in body
-    assert "این چه چیزی را پیش‌بینی می‌کند؟" in app_html("XAUUSD_i", 8653)
+    assert "این چه چیزی را پیش‌بینی می‌کند؟" in app_html("XAUUSD_i", port)
 
 
 def test_frozen_minutes_are_skipped_by_default(tmp_path) -> None:

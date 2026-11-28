@@ -103,3 +103,54 @@ def test_gpu_verdict_when_everything_is_fine() -> None:
         diag.Probe("ollama از GPU استفاده کرد", True, "library=cuda"),
     ]
     assert diag._gpu_verdict(probes) == ""
+
+
+def test_local_calls_never_go_through_the_environment_proxy(monkeypatch) -> None:
+    """روی ماشین کاربر پروکسی سیستم، درخواست 127.0.0.1:11434 را می‌گرفت و ۵۰۳ می‌داد."""
+    import http.server
+    import json
+    import socketserver
+    import threading
+    import urllib.request
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            body = json.dumps({"message": {"content": "ok"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # noqa: ANN002
+            pass
+
+    socketserver.TCPServer.allow_reuse_address = True
+    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)      # پورت آزاد
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")     # پروکسی مرده
+    monkeypatch.setenv("no_proxy", "localhost")                # 127.0.0.1 عمداً بیرون
+
+    try:
+        from tradeagent.llm import http_post_json
+
+        assert http_post_json(f"http://127.0.0.1:{port}/x", {}, {}, 3)["message"]["content"] == "ok"
+
+        # با opener تازه (که پروکسی محیط را می‌بیند) باید شکست بخورد.
+        # نکته: urlopen سراسری را اینجا صدا نمی‌زنیم چون یک بار ساخته و برای همیشه
+        # پروکسیِ همان لحظه را نگه می‌دارد و تست‌های بعدی را خراب می‌کند.
+        failed = False
+        try:
+            urllib.request.build_opener().open(f"http://127.0.0.1:{port}/", timeout=3)
+        except Exception:  # noqa: BLE001
+            failed = True
+        assert failed, "بدون دور زدن پروکسی نباید جواب بدهد"
+        monkeypatch.setattr(urllib.request, "_opener", None)
+    finally:
+        srv.shutdown()
+
+
+def test_doctor_reports_proxy_environment(monkeypatch) -> None:
+    monkeypatch.setenv("http_proxy", "http://10.0.0.1:8080")
+    probes = diag.diagnose_hosts(["http://127.0.0.1:1"], "m")   # پورت بسته: فقط ساختار را می‌سنجیم
+    assert probes and not probes[0].ok

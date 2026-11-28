@@ -69,11 +69,20 @@ class LLMResult:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
+def local_opener() -> Any:
+    """openerای که از پروکسی محیط ($http_proxy) استفاده نمی‌کند.
+
+    روی همین ماشین، پروکسی سیستم درخواست‌های `127.0.0.1:11434` را می‌گرفت و ۵۰۳ خالی برمی‌گرداند
+    در حالی که `localhost:11434` سالم بود. مدل محلی هیچ‌وقت نباید از پروکسی رد شود.
+    """
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def http_post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **headers}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - آدرس از پیکربندی می‌آید
+        with local_opener().open(req, timeout=timeout) as resp:  # noqa: S310 - آدرس از پیکربندی می‌آید
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         # بدنهٔ پاسخ را نگه دار: ollama دلیل واقعی را همین‌جا می‌نویسد

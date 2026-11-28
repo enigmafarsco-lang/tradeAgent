@@ -974,6 +974,7 @@ def serve(
     port: int = 8620,
     host: str = "0.0.0.0",
     studio: "Studio | None" = None,
+    on_ready: "Callable[[int], None] | None" = None,
 ) -> None:
     """سرور اپ: صفحه + /api/state + /api/next?n= (دکمهٔ «قدم بعد»).
 
@@ -1090,6 +1091,9 @@ def serve(
         allow_reuse_address = True
         daemon_threads = True
 
-    LOG.info("استودیو: http://%s:%d", host, port)
     with Server((host, port), Handler) as httpd:
+        real_port = httpd.server_address[1]
+        LOG.info("استودیو: http://%s:%d", host, real_port)
+        if on_ready is not None:
+            on_ready(real_port)
         httpd.serve_forever()
