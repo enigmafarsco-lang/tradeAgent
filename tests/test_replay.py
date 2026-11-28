@@ -131,3 +131,13 @@ def test_http_error_keeps_the_server_message() -> None:
             raise AssertionError("باید خطا بدهد")
     finally:
         llm_mod.urllib.request.urlopen = original
+
+
+def test_replay_cli_retries_the_model_before_giving_up() -> None:
+    """503 می‌تواند یعنی «مدل در حال بارگذاری»؛ باید چند بار صبر کند، بعد راهنمایی بدهد."""
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "src" / "tradeagent" / "cli.py").read_text(encoding="utf-8")
+    assert "for attempt in range(1, 6)" in body
+    assert "journalctl --user -u ollama" in body
+    assert "/api/chat" in body

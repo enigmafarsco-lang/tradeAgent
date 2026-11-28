@@ -204,10 +204,19 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
                     "analysis": f"پیش‌بینی ساختگی: {direction}"}
     else:
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
-        ok, why = advisor.preflight()
+        ok, why = False, ""
+        for attempt in range(1, 6):  # مدل ممکن است همین حالا در حال بارگذاری باشد
+            ok, why = advisor.preflight()
+            if ok:
+                break
+            print(f"  تلاش {attempt}/5: {why}")
+            time.sleep(6)
         if not ok:
-            print(f"  مدل جواب نمی‌دهد: {why}")
-            print("  راه‌حل: ollama serve (یا systemctl --user restart ollama) و مدل را از حافظه بیرون بکش")
+            print("  مدل جواب نمی‌دهد. این دو خط را بزن و خروجی‌شان را بفرست:")
+            print("    curl -sS -o /tmp/oll.json -w '%{http_code}\n' -X POST "
+                  f"{advisor.ollama_url}/api/chat -d '{{\"model\":\"{advisor.ollama_model}\","
+                  "\"messages\":[{\"role\":\"user\",\"content\":\"سلام\"}],\"stream\":false}'; cat /tmp/oll.json")
+            print("    journalctl --user -u ollama -n 25 --no-pager")
             return 1
         print(f"  مدل آماده است: {why}")
 
