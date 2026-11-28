@@ -25,3 +25,7 @@ publish/
 *.ex4
 *.log
 desktop.ini
+
+# لاگ تیک ربات (s1_ticks_*.jsonl) — دادهٔ خام، نه کد
+logs/
+*.jsonl.tmp
