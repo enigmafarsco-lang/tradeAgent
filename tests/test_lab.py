@@ -165,3 +165,36 @@ def test_lists_which_symbols_the_logs_contain(tmp_path) -> None:
     make_jsonl_logs(tmp_path / "a")
     dirs = discover_tick_dirs("XAUUSD_i", [tmp_path / "a"])
     assert dirs and str(dirs[0]).endswith("logs")
+
+
+def test_timestamps_in_microseconds_are_handled(tmp_path) -> None:
+    from tradeagent.lab import iter_tick_file
+
+    p = tmp_path / "x.jsonl"
+    p.write_text(json.dumps({"ts": 1_760_000_000_000_000, "bid": 3620.0, "ask": 3620.2}) + "\n", encoding="utf-8")
+    ms, bid, ask, _ = next(iter(iter_tick_file(p)))
+    assert ms == 1_760_000_000_000 and bid == 3620.0 and ask == 3620.2
+
+
+def test_symbols_are_read_from_the_log_filenames(tmp_path) -> None:
+    from tradeagent.lab import symbols_in_logs
+
+    d = make_jsonl_logs(tmp_path)
+    (d / "s1_ticks_GER40_i_20261127.jsonl").write_text("", encoding="utf-8")
+    assert symbols_in_logs([d]) == ["GER40_i", "XAUUSD_i"]
+
+
+def test_lab_all_prints_one_row_per_symbol(tmp_path, capsys) -> None:
+    from tradeagent.cli import cmd_lab_all
+    from tradeagent.config import Config
+
+    d = make_jsonl_logs(tmp_path, minutes=200)
+    import argparse
+
+    args = argparse.Namespace(data=str(d), out=str(tmp_path / "out"), horizon=3, flat_bp=3.0,
+                              folds=3, cost_bp=1.0, epochs=60, port=8620, symbol=None)
+    cfg = Config({"data": {"state_dir": "var"}}, root=tmp_path)
+    assert cmd_lab_all(cfg, args) == 0
+    out = capsys.readouterr().out
+    assert "XAUUSD_i" in out and "خالص مدل" in out
+    assert (tmp_path / "var" / "out" / "index.html").exists() or (tmp_path / "out" / "index.html").exists()

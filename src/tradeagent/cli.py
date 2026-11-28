@@ -7,7 +7,8 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import Sequence
+from html import escape as html_escape
+from typing import Any, Sequence
 
 from . import __version__
 from .config import DEFAULT_CONFIG, REPO_ROOT, Config
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_lab.add_argument("--epochs", type=int, default=250)
     p_lab.add_argument("--data", default=None, help="پوشهٔ داده (harvester یا logs با s1_ticks_*.jsonl)")
     p_lab.add_argument("--list", action="store_true", help="فقط نشان بده چه داده‌ای هست و از چه نمادی")
+    p_lab.add_argument("--all", action="store_true", help="همهٔ نمادهای موجود در لاگ‌ها را بسنج و یک جدول بده")
     p_lab.add_argument("--out", default="var/lab")
     p_lab.add_argument("--serve", action="store_true", help="بعد از ساخت، داشبورد را روی پورت بالا بیاور")
     p_lab.add_argument("--port", type=int, default=8610)
@@ -222,6 +224,9 @@ def cmd_lab(cfg: Any, args: Any) -> int:
                 print(f"    نمونه: {f.name} ({f.stat().st_size / 1e6:.1f}MB) کلیدها: {probe_tick_file(f).get('keys')}")
         return 0
 
+    if getattr(args, "all", False):
+        return cmd_lab_all(cfg, args)
+
     if args.data:
         root = Path(args.data).expanduser()
     else:
@@ -267,6 +272,59 @@ def cmd_lab(cfg: Any, args: Any) -> int:
         from .lab import serve_lab
 
         serve_lab(Path(data["html_path"]).parent, port=args.port)
+    return 0
+
+
+def cmd_lab_all(cfg: Any, args: Any) -> int:
+    """همهٔ نمادهای موجود در لاگ ربات: یک ردیف برای هر نماد."""
+    from .lab import discover_tick_dirs, run as run_lab, symbols_in_logs
+
+    base = Path(args.data).expanduser() if args.data else Path("").resolve()
+    dirs = discover_tick_dirs(args.symbol or "XAUUSD_i", [base] if args.data else [])
+    if not dirs:
+        dirs = [base] if base.is_dir() else []
+    symbols = symbols_in_logs(dirs) or []
+    if not symbols:
+        print("  نمادی در لاگ‌ها پیدا نشد. با --data مسیر پوشهٔ لاگ را بده.")
+        return 1
+    print(f"═══ آزمایشگاه روی {len(symbols)} نماد · افق {args.horizon} کندل M1 ═══")
+    print("   نماد            تیک     کندل   مدل%   قاعده%   خالص مدل   خالص قاعده   نتیجه")
+    rows = []
+    out_root = cfg.path(args.out, args.out)
+    for sym in symbols:
+        data = run_lab(base, sym, horizon=args.horizon, flat_bp=args.flat_bp, n_folds=args.folds,
+                       cost_bp=args.cost_bp, epochs=args.epochs, out_dir=out_root / sym,
+                       serve=False, port=args.port)
+        if not data.get("ok"):
+            print(f"   {sym:<14} —  {data.get('error')}")
+            continue
+        summary = {r["name"]: r for r in data["summary"]}
+        model = summary.get("رگرسیون لجستیک", {})
+        rule = summary.get("قاعدهٔ تکانه", {})
+        best = data["summary"][0] if data["summary"] else {}
+        print(f"   {sym:<14} {data['ticks'] or 0:>7,} {data['candles_n']:>6}  "
+              f"{model.get('accuracy', 0) * 100:5.1f}%  {rule.get('accuracy', 0) * 100:5.1f}%  "
+              f"{model.get('net_bp', 0):+9.1f}  {rule.get('net_bp', 0):+10.1f}   {best.get('name', '')}")
+        rows.append((sym, data))
+    if not rows:
+        return 1
+    index = out_root / "index.html"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    links = "".join(
+        f'<li><a href="{html_escape(sym)}/index.html">{html_escape(sym)}</a> — '
+        f'{d["candles_n"]} کندل · {d.get("verdict", "")}</li>'
+        for sym, d in rows
+    )
+    index.write_text(
+        '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
+        "<title>آزمایشگاه مدل — همهٔ نمادها</title>"
+        "<body style=\"background:#0b1120;color:#e2e8f5;font-family:system-ui,Tahoma;padding:22px\">"
+        f"<h1>آزمایشگاه مدل — {len(rows)} نماد</h1>"
+        "<p style='color:#8ba0c7'>افق: " + str(args.horizon) + " کندل M1 · هزینه: "
+        + str(args.cost_bp) + " bp</p><ul>" + links + "</ul></body></html>",
+        encoding="utf-8",
+    )
+    print(f"  فهرست: {index}")
     return 0
 
 

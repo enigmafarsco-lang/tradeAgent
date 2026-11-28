@@ -127,6 +127,22 @@ SEARCH_HINTS = (
 )
 
 
+def symbols_in_logs(dirs: Sequence[Path]) -> list[str]:
+    """نمادهایی که در نام فایل‌های s1_ticks_<SYMBOL>_<date>.jsonl پیدا می‌شوند."""
+    found: set[str] = set()
+    for d in dirs:
+        try:
+            files = list(Path(d).glob("s1_ticks_*.jsonl"))
+        except OSError:
+            continue
+        for f in files:
+            tail = f.name[len("s1_ticks_"):]
+            if "_" not in tail:
+                continue
+            found.add(tail.rsplit("_", 1)[0])
+    return sorted(found)
+
+
 def discover_tick_dirs(symbol: str, extra: Sequence[Path] = ()) -> list[Path]:
     """پوشه‌هایی که s1_ticks_<SYMBOL>_*.jsonl دارند (دادهٔ آفلاین ربات trade-mc)."""
     import os
@@ -203,7 +219,9 @@ def _tick_from_json(obj: dict[str, Any]) -> tuple[int, float, float, float] | No
     t = num("time_msc", "timemsc", "msc", "ts_ms", "epoch_ms", "ts", "timestamp", "time", "t")
     if t is None:
         return None
-    if t < 1e11:            # ثانیه بود
+    if t > 1e14:            # میکروثانیه بود
+        t /= 1000.0
+    elif t < 1e11:          # ثانیه بود
         t *= 1000.0
     bid = num("bid", "bid_price", "b")
     ask = num("ask", "ask_price", "a")
@@ -244,7 +262,9 @@ def iter_tick_file(path: Path) -> Iterable[tuple[int, float, float, float]]:
                     continue
                 try:
                     ms = int(float(parts[0]))
-                    if ms < 10 ** 11:
+                    if ms > 10 ** 14:
+                        ms //= 1000
+                    elif ms < 10 ** 11:
                         ms *= 1000
                     bid = float(parts[2])
                     ask = float(parts[3])
