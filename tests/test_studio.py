@@ -240,3 +240,36 @@ def test_navigation_endpoints_goto_prev_and_reset(tmp_path) -> None:
     back = call("reset")
     assert back["step_index"] == 0 and back["cursor"] is None
     assert "seek" in app_html("XAUUSD_i", 8652)
+
+
+def test_review_markdown_says_what_was_tested(tmp_path) -> None:
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=25)
+    md = (tmp_path / "st" / "review.md").read_text(encoding="utf-8")
+    for part in ("# گزارش استودیو", "## داده", "## تنظیمات", "## نتیجه", "## معاملات کاغذی",
+                 "فقط جهت‌دار", "| جهت: up", "## ۳۰ تصمیم آخر"):
+        assert part in md, part
+    saved = json.loads((tmp_path / "st" / "review.json").read_text(encoding="utf-8"))
+    assert saved["totals"]["decisions"] == 25
+    assert saved["settings"]["horizon_candles"] == 3
+    csv_lines = (tmp_path / "st" / "review.csv").read_text(encoding="utf-8").splitlines()
+    assert csv_lines[0].startswith("time_utc,direction") and len(csv_lines) == 26
+
+
+def test_review_file_is_served_for_download(tmp_path) -> None:
+    import threading
+    import time
+    import urllib.request
+
+    from tradeagent.studio import serve
+
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.walk(limit=12)
+    threading.Thread(target=serve, args=(tmp_path / "st", "XAUUSD_i", 8653),
+                     kwargs={"studio": studio}, daemon=True).start()
+    time.sleep(1.2)
+    body = urllib.request.urlopen("http://127.0.0.1:8653/review.md").read().decode()
+    assert "گزارش استودیو" in body and "دقت کل" in body
+    assert "این چه چیزی را پیش‌بینی می‌کند؟" in app_html("XAUUSD_i", 8653)

@@ -70,6 +70,13 @@ class Prediction:
     hit: int | None = None
 
 
+def _utc(ts: Any) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.gmtime(float(ts)))
+    except (TypeError, ValueError):
+        return "-"
+
+
 def _digest(candles: Sequence[Candle], i: int, window: int = 30) -> dict[str, Any]:
     """تصویر عددی گذشته برای مدل: کندل‌های اخیر + ویژگی‌های مشتق‌شده."""
     feats = features_at(candles, i) or {}
@@ -404,6 +411,108 @@ class Studio:
         self.save()
         return {"ok": True, **self.stats(), "candles": n, "step_min": step}
 
+
+    # -- گزارش برای بازبینی ---------------------------------------------
+    def review(self) -> dict[str, Any]:
+        """خلاصهٔ قابل فرستادن: چه چیزی، روی چه داده‌ای، با چه دقتی."""
+        cov = self.coverage()
+        scored = [p for p in self.preds if p.hit is not None]
+        directional = [p for p in scored if p.direction != "flat"]
+
+        def bucket(key_fn):
+            out: dict[str, list[int]] = {}
+            for p in scored:
+                out.setdefault(str(key_fn(p)), []).append(p.hit or 0)
+            return {k: {"n": len(v), "hit_pct": round(100.0 * sum(v) / len(v), 1)}
+                    for k, v in sorted(out.items())}
+
+        return {
+            "symbol": self.symbol,
+            "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "data": cov,
+            "settings": {
+                "horizon_candles": self.horizon,
+                "step_min": self.step_min,
+                "flat_bp": self.flat_bp,
+                "cost_bp": self.cost_bp,
+                "min_conf": self.min_conf,
+                "window": self.window,
+            },
+            "totals": {
+                "decisions": len(self.preds),
+                "scored": len(scored),
+                "hit_pct": round(100.0 * sum(p.hit or 0 for p in scored) / len(scored), 1) if scored else 0.0,
+                "directional": len(directional),
+                "directional_hit_pct": round(100.0 * sum(p.hit or 0 for p in directional) / len(directional), 1)
+                if directional else 0.0,
+                "avg_actual_bp": round(sum(p.actual_bp or 0 for p in scored) / len(scored), 2) if scored else 0.0,
+                "model_errors": self.failures,
+            },
+            "trades": self.trade_stats(),
+            "by_direction": bucket(lambda p: p.direction),
+            "by_source": bucket(lambda p: p.source),
+            "by_hour": bucket(lambda p: time.strftime("%H", time.gmtime(p.t))),
+            "recent": [
+                {"t": time.strftime("%m-%d %H:%M", time.gmtime(p.t)),
+                 "direction": p.direction, "confidence": p.confidence,
+                 "entry": p.entry, "actual_bp": p.actual_bp, "hit": p.hit,
+                 "source": p.source, "reason": p.reason}
+                for p in self.preds[-30:]
+            ],
+        }
+
+    def review_markdown(self) -> str:
+        r = self.review()
+        d, st, tot, tr = r["data"], r["settings"], r["totals"], r["trades"]
+        lines = [
+            f"# گزارش استودیو — {r['symbol']}",
+            "",
+            f"ساخته‌شده: {r['generated']}",
+            "",
+            "## داده",
+            f"- منبع: `{d.get('source')}`",
+            f"- فایل‌ها: {d.get('files', 0)} · تیک: {d.get('ticks', 0):,} · کندل M1: {d.get('candles', 0)}",
+            f"- بازه: {_utc(d.get('first'))} → {_utc(d.get('last'))} · شکاف: {d.get('gaps', 0)}",
+            "",
+            "## تنظیمات",
+            f"- افق: {st['horizon_candles']} کندل M1 · گام: {st['step_min']} دقیقه",
+            f"- آستانهٔ خنثی: {st['flat_bp']}bp · هزینهٔ هر معامله: {st['cost_bp']}bp · کمترین اطمینان: {st['min_conf']}",
+            "",
+            "## نتیجه",
+            f"- تصمیم: {tot['decisions']} · سنجیده: {tot['scored']} · دقت کل: **{tot['hit_pct']}%**",
+            f"- فقط جهت‌دار (up/down): {tot['directional']} تصمیم · دقت: **{tot['directional_hit_pct']}%**",
+            f"- میانگین حرکت واقعی بعد از افق: {tot['avg_actual_bp']:+.2f}bp · خطای مدل: {tot['model_errors']}",
+            "",
+            "## معاملات کاغذی",
+            f"- بازشده: {tr['trades']} · بسته: {tr['closed']} · باز: {tr['open']}",
+            f"- برد: {tr['wins']} ({tr['win_pct']}%) · خالص: {tr['net_bp']:+.2f}bp · "
+            f"ناخالص: {tr.get('gross_bp', 0):+.2f}bp · هزینه: {tr.get('cost_paid_bp', 0):.0f}bp",
+            "",
+            "## تفکیک",
+            "",
+            "| گروه | تعداد | دقت |",
+            "| --- | --- | --- |",
+        ]
+        for title, table in (("جهت", r["by_direction"]), ("منبع", r["by_source"])):
+            for k, v in table.items():
+                lines.append(f"| {title}: {k} | {v['n']} | {v['hit_pct']}% |")
+        for k, v in r["by_hour"].items():
+            lines.append(f"| ساعت {k} UTC | {v['n']} | {v['hit_pct']}% |")
+        lines += [
+            "",
+            "## ۳۰ تصمیم آخر",
+            "",
+            "| زمان | جهت | ورود | واقعی | درست | منبع | دلیل |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for p in reversed(r["recent"]):
+            mark = "—" if p["hit"] is None else ("✓" if p["hit"] else "✗")
+            actual = "—" if p["actual_bp"] is None else f"{p['actual_bp']:+.2f}bp"
+            reason = (p["reason"] or "").replace("|", "/")[:80]
+            lines.append(f"| {p['t']} | {p['direction']} | {p['entry']} | {actual} | {mark} | {p['source']} | {reason} |")
+        lines.append("")
+        return "\n".join(lines)
+
     # -- ذخیره -----------------------------------------------------------
     def coverage(self) -> dict[str, Any]:
         """چه داده‌ای خوانده شد: فایل‌ها، تیک، کندل، شکاف‌ها."""
@@ -470,6 +579,20 @@ class Studio:
                         fh.write(json.dumps(asdict(p), ensure_ascii=False) + "\n")
             self._full_write = False
             self._saved = len(self.preds)
+            review = self.review()
+            (self.out / "review.json").write_text(json.dumps(review, ensure_ascii=False, indent=2),
+                                                   encoding="utf-8")
+            (self.out / "review.md").write_text(self.review_markdown(), encoding="utf-8")
+            with (self.out / "review.csv").open("w", encoding="utf-8") as fh:
+                fh.write("time_utc,direction,confidence,entry,actual_bp,hit,source,reason\n")
+                for p in self.preds:
+                    fh.write(",".join([
+                        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(p.t)), p.direction,
+                        f"{p.confidence:.2f}", f"{p.entry:.3f}",
+                        "" if p.actual_bp is None else f"{p.actual_bp:.3f}",
+                        "" if p.hit is None else str(p.hit), p.source,
+                        '"' + (p.reason or "").replace('"', "'") + '"',
+                    ]) + "\n")
             self._save_cache()
         except OSError as exc:
             LOG.warning("ذخیرهٔ وضعیت استودیو نشد: %s", exc)
@@ -501,6 +624,7 @@ th,td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right}
 th{background:#16233c;color:var(--muted)}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
 .pill{padding:1px 7px;border-radius:99px;border:1px solid var(--line);font-size:11px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:13px;line-height:1.9}
 .pos{color:var(--up)} .neg{color:var(--down)}
 </style></head><body>
 <h1>استودیو ایجنت — <span id="sym">SYMBOL</span> <span class="muted" id="prog"></span></h1>
@@ -512,6 +636,7 @@ th{background:#16233c;color:var(--muted)}
   <button class="ghost" onclick="go(5)">۵ قدم</button>
   <button class="ghost" onclick="go(25)">۲۵ قدم</button>
   <button class="ghost" onclick="go(0)">تا آخر</button>
+  <a class="ghost" href="review.md" target="_blank" style="color:#c7d2fe;text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:10px">📄 گزارش بازبینی</a>
 </div>
 <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px">
   <input id="seek" type="range" min="0" max="0" value="0" style="flex:1"
@@ -527,6 +652,7 @@ th{background:#16233c;color:var(--muted)}
   <button class="ghost" onclick="toggleFollow()" id="fb">همراه تصمیم: روشن</button>
   <span class="muted" id="cov"></span>
 </div>
+<div class="box" id="what" style="margin-top:8px"></div>
 <canvas id="chart" height="400"></canvas>
 <div class="muted" id="legend">▲/▼ = تصمیم ایجنت روی کندل · خط‌چین = از قیمت تصمیم تا قیمت واقعی بعد از افق · سبز یعنی درست</div>
 <h2>معاملات کاغذی</h2>
@@ -603,9 +729,10 @@ function draw(){
       ctx.beginPath(); ctx.arc(xAt(k2),y(px2),2.4,0,6.28); ctx.fill();
     }
   });
-  // نمودار آینده: مسیر پیش‌بینی‌شدهٔ افق بعد از آخرین تصمیم
+  // نمودار آینده: مسیر پیش‌بینی‌شدهٔ افق بعد از کندلِ تصمیم فعلی
   if(lastPred){
-    const k0=cs.length-1;
+    const k0raw = (idxOf[lastPred.t]!==undefined ? idxOf[lastPred.t] : (state.cursor||cs.length-1)) - startI;
+    const k0 = Math.max(0, Math.min(k0raw, cs.length-1));
     const p0=y(cs[k0].c);
     const dir=lastPred.direction==='up'?1:lastPred.direction==='down'?-1:0;
     const scale=Math.max(2,(hi-lo)*0.18)*Math.max(0.35,lastPred.confidence||0.5);
@@ -618,7 +745,7 @@ function draw(){
     ctx.beginPath(); ctx.arc(xAt(kEnd), y(cs[k0].c+dir*scale), 3.5, 0, 6.28); ctx.fill();
     ctx.font='11px system-ui'; ctx.textAlign='left';
     ctx.fillText('آیندهٔ '+(lastPred.direction==='up'?'صعودی':lastPred.direction==='down'?'نزولی':'خنثی'),
-                 Math.min(W-70, xAt(kEnd)+4), Math.max(14, y(cs[k0].c+dir*scale)-8));
+                 Math.max(40, Math.min(W-70, xAt(kEnd)+4)), Math.max(14, y(cs[k0].c+dir*scale)-8));
   }
   // خط «اکنون»: کجای تاریخ ایستاده‌ایم
   if(state.cursor!==null && state.cursor!==undefined && state.cursor<=lastIdx){
@@ -659,6 +786,23 @@ function render(force){
     ['دقت جهت‌دار',(s.dir_hit_pct||0)+'%'],['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
     ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],
     ['هزینه',(ts.cost_paid_bp||0)+'bp'],['باز',ts.open||0]];
+  const lp=(state.preds||[])[(state.preds||[]).length-1];
+  const what=document.getElementById('what');
+  if(what){
+    if(lp){
+      const from=fmt(lp.t), toT=lp.t+state.horizon*60;
+      const to=fmt(toT);
+      what.innerHTML='<b>این چه چیزی را پیش‌بینی می‌کند؟</b> جهت حرکت قیمت از بسته‌شدن کندل '+
+        '<b>'+from+'</b> با قیمت <b>'+lp.entry+'</b> تا <b>'+state.horizon+'</b> کندل یک‌دقیقه‌ای بعد '+
+        '(یعنی حدود ساعت <b>'+to+'</b>) — تصمیم: <b class="'+lp.direction+'">'+
+        (lp.direction==='up'?'صعودی':lp.direction==='down'?'نزولی':'خنثی')+
+        '</b> با اطمینان '+lp.confidence.toFixed(2)+' · منبع: '+lp.source+
+        '<br><span class="muted">خط زرد = همان کندل تصمیم (اکنون) · خط‌چین رنگی از آن کندل به راست = مسیر پیش‌بینی‌شده · '+
+        'خط‌چین‌های سبز/سرخ در گذشته = هر تصمیم و نتیجهٔ واقعی‌اش</span>';
+    } else {
+      what.textContent='هنوز تصمیمی گرفته نشده؛ «قدم بعد» را بزن.';
+    }
+  }
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   const rows=(state.preds||[]).slice(-20).reverse().map(p=>{
     const act=p.actual_bp===null?'—':((p.actual_bp>0?'+':'')+p.actual_bp+'bp');
@@ -790,6 +934,16 @@ def serve(
                     studio.save()
                     body = json.dumps(studio.state(), ensure_ascii=False).encode()
                 self._send(body, "application/json; charset=utf-8")
+                return
+            if path in ("/review.md", "/review.csv", "/review.json"):
+                try:
+                    body = (root / path.lstrip("/")).read_bytes()
+                except OSError:
+                    body = b"not ready"
+                ctype = ("text/markdown; charset=utf-8" if path.endswith(".md")
+                         else "text/csv; charset=utf-8" if path.endswith(".csv")
+                         else "application/json; charset=utf-8")
+                self._send(body, ctype)
                 return
             if path in ("/api/state", "/state.json"):
                 try:

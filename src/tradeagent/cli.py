@@ -409,6 +409,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
         print("  " + "─" * 40)
         print(f"  اپ آماده است: {url}")
         print("  دکمه‌های «قدم بعد / ۵ قدم / تا آخر» ایجنت را جلو می‌برند.")
+        print(f"  گزارش بازبینی: {url}/review.md  (دکمهٔ 📄 بالای چارت)")
         print("  " + "─" * 40)
         if not args.no_open:
             try:
@@ -438,6 +439,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
           f"خالص {trades['net_bp']:+.1f}bp · هزینهٔ پرداختی {trades['cost_paid_bp']:.0f}bp")
     if result.get("failures"):
         print(f"  خطای مدل: {result['failures']} (آخرین: {result['last_error']})")
+    print(f"  گزارش بازبینی (همین را بفرست): {out_dir / 'review.md'}")
+    print(f"  نسخهٔ CSV/JSON: {out_dir / 'review.csv'} · {out_dir / 'review.json'}")
     print(f"  وضعیت: {out_dir / 'state.json'}")
     print(f"  پیش‌بینی‌ها: {out_dir / 'predictions.jsonl'}")
     return 0
