@@ -106,15 +106,7 @@ def find_tick_files(root: Path, symbol: str) -> list[Path]:
     """فایل‌های تیک را پیدا می‌کند: csv داخل harvester، یا jsonl لاگ ربات (s1_ticks_...)."""
     from .replay import tick_files
 
-    root = Path(root).expanduser()
-    files = tick_files(root, symbol)
-    if not files and (root / symbol).is_dir():
-        files = sorted((root / symbol).glob("*.csv"))
-    if not files:
-        files = sorted(root.glob("*.csv"))
-    if files:
-        return files
-    return [p for p in sorted(root.glob("*.jsonl")) if symbol in p.name] or sorted(root.glob("*.jsonl"))
+    return tick_files(root, symbol)
 
 
 SEARCH_HINTS = (

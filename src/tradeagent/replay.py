@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from .agent import normalize_momentum, parse_agent_reply
 from .nowcast import tick_digest
-from .ticks import Bar, aggregate_ticks, parse_tick_line
+from .ticks import Bar, Tick, aggregate_ticks, parse_tick_line
 from .util import LOG, ensure_dir, utc_iso
 
 PREDICT_PROMPT = """تو تحلیلگر تیک‌های ثانیه‌ای طلا هستی. فقط با همین عددها تصمیم بگیر.
@@ -40,33 +40,35 @@ PREDICT_PROMPT = """تو تحلیلگر تیک‌های ثانیه‌ای طلا
 # خواندن تیک‌ها
 # ---------------------------------------------------------------------------
 def tick_files(root: Path, symbol: str) -> list[Path]:
-    base = Path(root).expanduser() / "ticks" / symbol
-    return sorted(base.glob("*.csv"))
+    """فایل‌های تیک نماد: csv داخل harvester یا jsonl لاگ ربات (s1_ticks_<SYMBOL>_*.jsonl)."""
+    root = Path(root).expanduser()
+    base = root / "ticks" / symbol
+    for candidate in (sorted(base.glob("*.csv")),
+                      sorted((root / symbol).glob("*.csv")) if (root / symbol).is_dir() else [],
+                      sorted(root.glob("*.csv"))):
+        if candidate:
+            return candidate
+    matched = [p for p in sorted(root.glob("*.jsonl")) if symbol in p.name]
+    return matched or sorted(root.glob("*.jsonl"))
 
 
 def iter_second_bars(paths: Sequence[Path]) -> Iterator[Bar]:
     """فایل‌های روزانه را به کندل ثانیه‌ای تبدیل می‌کند، بدون خواندن کل فایل در حافظه."""
+    from .lab import iter_tick_file
+
     bucket: list = []
     current = -1
     for path in paths:
-        try:
-            fh = path.open("r", encoding="utf-8", errors="replace")
-        except OSError as exc:
-            LOG.warning("فایل تیک خوانده نشد %s: %s", path, exc)
-            continue
-        with fh:
-            for line in fh:
-                tick = parse_tick_line(line)
-                if tick is None:
-                    continue
-                sec = tick.time_msc // 1000
-                if sec != current and bucket:
-                    bars = aggregate_ticks(bucket)
-                    if bars:
-                        yield bars[0]
-                    bucket = []
-                current = sec
-                bucket.append(tick)
+        for ms, bid, ask, volume in iter_tick_file(path):
+            tick = Tick(time_msc=ms, bid=bid, ask=ask, volume=volume)
+            sec = ms // 1000
+            if sec != current and bucket:
+                bars = aggregate_ticks(bucket)
+                if bars:
+                    yield bars[0]
+                bucket = []
+            current = sec
+            bucket.append(tick)
     if bucket:
         bars = aggregate_ticks(bucket)
         if bars:

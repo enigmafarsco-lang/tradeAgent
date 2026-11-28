@@ -86,6 +86,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_lab.add_argument("--data", default=None, help="پوشهٔ داده (harvester یا logs با s1_ticks_*.jsonl)")
     p_lab.add_argument("--list", action="store_true", help="فقط نشان بده چه داده‌ای هست و از چه نمادی")
     p_lab.add_argument("--all", action="store_true", help="همهٔ نمادهای موجود در لاگ‌ها را بسنج و یک جدول بده")
+
+    p_studio = sub.add_parser("studio", help="استودیو: ایجنت روی دادهٔ آفلاین جلو می‌رود + اپ زندهٔ چارت")
+    p_studio.add_argument("--symbol", default=None)
+    p_studio.add_argument("--data", default=None, help="پوشهٔ تیک‌ها یا logs (پیش‌فرض: جست‌وجو)")
+    p_studio.add_argument("--step-min", type=int, default=1, help="هر چند دقیقه یک تصمیم")
+    p_studio.add_argument("--horizon", type=int, default=3, help="افق: چند کندل M1 بعد")
+    p_studio.add_argument("--limit", type=int, default=None, help="حداکثر چند تصمیم (برای آزمون سریع)")
+    p_studio.add_argument("--no-llm", action="store_true", help="بدون مدل: فقط قاعدهٔ تکانه")
+    p_studio.add_argument("--serve", action="store_true", help="اپ را روی پورت بالا بیاور")
+    p_studio.add_argument("--port", type=int, default=8620)
+    p_studio.add_argument("--out", default="var/studio")
     p_lab.add_argument("--out", default="var/lab")
     p_lab.add_argument("--serve", action="store_true", help="بعد از ساخت، داشبورد را روی پورت بالا بیاور")
     p_lab.add_argument("--port", type=int, default=8610)
@@ -328,6 +339,72 @@ def cmd_lab_all(cfg: Any, args: Any) -> int:
     return 0
 
 
+def cmd_studio(cfg: Any, args: Any) -> int:
+    """ایجنت کندل‌به‌کندل روی داده جلو می‌رود و اپ زنده نشان می‌دهد."""
+    import threading
+
+    from .lab import discover_tick_dirs, find_tick_files
+    from .llm import LLMAdvisor
+    from .studio import Studio, serve
+
+    symbol = args.symbol or (cfg.symbols or ["XAUUSD_i"])[0]
+    root = Path(args.data).expanduser() if args.data else Path("").resolve()
+    out_dir = cfg.path(args.out, args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"═══ استودیو: {symbol} · گام {args.step_min} دقیقه · افق {args.horizon} کندل ═══")
+    found = find_tick_files(root, symbol)
+    logs = [d for d in discover_tick_dirs(symbol, [root] if args.data else []) if str(d) != str(root)]
+    print(f"  داده: {root if found else (logs[0] if logs else root)}"
+          f"{'' if found else ' (از logs)'}")
+
+    chat = None
+    if not args.no_llm:
+        advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
+        ok, why = advisor.preflight()
+        if ok:
+            print(f"  مدل: آماده است ({why[:40]})")
+
+            def chat(messages):  # noqa: ANN001, ANN202
+                return advisor.chat(messages)
+        else:
+            print(f"  مدل جواب نداد: {why[:120]}")
+            print("  ─ با قاعدهٔ تکانه جلو می‌رود و در جدول، منبع هر تصمیم «rule» نوشته می‌شود.")
+
+    studio = Studio(root, symbol, out_dir, chat=chat, step_min=args.step_min, horizon=args.horizon)
+    if args.limit:
+        studio.candles = []   # بارگذاری در walk
+
+    if args.serve:
+        threading.Thread(target=serve, args=(out_dir, symbol, args.port), daemon=True).start()
+        print(f"  اپ: http://127.0.0.1:{args.port}  (زنده به‌روز می‌شود)")
+
+    def progress(info: dict[str, Any]) -> None:
+        eta = info.get("eta_s") or 0
+        print(f"  پیشرفت: {info['made']}/{info['total']} · دقت تا اینجا {info['hit_pct']}% · "
+              f"خالص {info['net_bp']:+.0f}bp · ~{eta // 60} دقیقه مانده", flush=True)
+
+    result = studio.walk(limit=args.limit, progress=progress)
+    if not result.get("ok"):
+        print("  " + str(result.get("error")))
+        return 1
+    print(f"  کندل: {result['candles']} · تصمیم: {result['predictions']} · سنجیده: {result['scored']}")
+    print(f"  دقت جهت: {result['hit_pct']}% · معامله: {result['bets']} · خالص: {result['net_bp']:+.1f}bp "
+          f"· میانگین: {result['avg_bp']:+.2f}bp")
+    if result.get("failures"):
+        print(f"  خطای مدل: {result['failures']} (آخرین: {result['last_error']})")
+    print(f"  وضعیت: {out_dir / 'state.json'}")
+    print(f"  پیش‌بینی‌ها: {out_dir / 'predictions.jsonl'}")
+    if args.serve:
+        print("  اپ بالاست؛ Ctrl+C برای توقف.")
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            return 0
+    return 0
+
+
 def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
     import random
 
@@ -536,6 +613,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ticks": cmd_ticks,
         "replay": cmd_replay,
         "lab": cmd_lab,
+        "studio": cmd_studio,
     }
     handler = handlers.get(args.cmd)
     if handler is None:  # pragma: no cover
