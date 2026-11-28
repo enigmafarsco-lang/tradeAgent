@@ -232,6 +232,8 @@ class Studio:
         self.last_error = ""
         self.model_down = False        # مدارشکن: بعد از چند خطای پشت‌سرهم، مدل را صدا نزن
         self._fail_streak = 0
+        self.quota_hits = 0           # سقف فراخوانی، نه خرابی مدل
+        self.quota_error = ""
         self._saved = 0
         self._cursor: int | None = None
         self._full_write = False
@@ -298,6 +300,17 @@ class Studio:
             self._fail_streak = 0
             return parsed
         except Exception as exc:  # noqa: BLE001 - مدل ممکن است قطع باشد
+            if getattr(exc, "quota", False):
+                # سهمیه خطای مدل نیست: نه مدارشکن را می‌زند، نه «قطعی» نشان می‌دهد
+                self.quota_hits += 1
+                self.quota_error = str(exc)[:200]
+                if self.quota_hits == 1:
+                    LOG.warning("سقف فراخوانی مدل پر شد (%s)؛ این اجرا با قاعده جلو می‌رود. "
+                                "برای برداشتن سقف: ./scripts/studio.sh --serve --max-calls-per-hour 0",
+                                self.quota_error)
+                out = momentum_rule(self.candles, i, self.flat_bp)
+                out["source"] = "rule"
+                return out
             self.failures += 1
             self._fail_streak += 1
             self.last_error = f"{type(exc).__name__}: {exc}"[:200]
@@ -344,6 +357,8 @@ class Studio:
             "avg_bp": round(net / len(bets), 2) if bets else 0.0,
             "failures": self.failures,
             "model_down": self.model_down,
+            "quota_hits": self.quota_hits,
+            "quota_error": self.quota_error,
             "last_error": self.last_error,
         }
 
@@ -550,6 +565,8 @@ class Studio:
                 "avg_actual_bp": round(sum(p.actual_bp or 0 for p in scored) / len(scored), 2) if scored else 0.0,
                 "model_errors": self.failures,
             "model_down": self.model_down,
+            "quota_hits": self.quota_hits,
+            "quota_error": self.quota_error,
             "frozen_skipped": self.frozen_skipped,
             "avg_abs_move_bp": round(sum(abs(p.actual_bp or 0) for p in scored) / len(scored), 2)
             if scored else 0.0,
@@ -899,7 +916,7 @@ function render(force){
     ['دقت جهت‌دار',(s.dir_hit_pct||0)+'%'],['معامله',(ts.closed||0)+'/'+(ts.trades||0)],['برد',(ts.win_pct||0)+'%'],
     ['خالص معاملات',((ts.net_bp||0)>=0?'+':'')+(ts.net_bp||0)+'bp'],
     ['هزینه',(ts.cost_paid_bp||0)+'bp'],['باز',ts.open||0],
-    ['مدل', s.model_down?'قطع':'آماده']];
+    ['مدل', s.model_down?'قطع':((s.quota_hits||0)>0?'سقف‌خورده':'آماده')]];
   const lp=(state.preds||[])[(state.preds||[]).length-1];
   const what=document.getElementById('what');
   if(what){
@@ -921,8 +938,14 @@ function render(force){
   if(alert){
     if(s.model_down || (s.failures||0)>0){
       alert.style.display='block';
+      alert.style.background='#7f1d1d';
       alert.innerHTML='⚠️ مدل جواب نمی‌دهد ('+(s.failures||0)+' خطا'+(s.last_error?': '+s.last_error.slice(0,80):'')+
         ') — الان با قاعدهٔ تکانه جلو می‌رود. عیب‌یابی: <code>./scripts/studio.sh --doctor</code>';
+    } else if((s.quota_hits||0)>0){
+      alert.style.display='block';
+      alert.style.background='#92400e';
+      alert.innerHTML='⏳ سقف فراخوانی مدل در ساعت پر شده ('+(s.quota_hits)+' بار) — تصمیم‌ها با قاعده گرفته می‌شوند. '+
+        'برداشتن سقف: <code>./scripts/studio.sh --serve --max-calls-per-hour 0</code>';
     } else { alert.style.display='none'; }
   }
   document.getElementById('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');

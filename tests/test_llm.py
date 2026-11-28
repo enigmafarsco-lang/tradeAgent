@@ -80,7 +80,7 @@ def test_quota_limits_calls(gemini_cfg: Config, tmp_path: Path) -> None:
     assert advisor.consult({}).proposal is not None
     third = advisor.consult({})
     assert third.proposal is None
-    assert "سهمیه" in third.meta["error"]
+    assert third.meta.get("quota") and "سقف" in third.meta["error"]
 
 
 def test_ollama_provider(tmp_path: Path) -> None:
@@ -176,3 +176,36 @@ def test_speech_models_are_not_used() -> None:
     assert not is_text_model("gemini-3.8-flash-image")
     # پیشنهاد گوگل اگر مدل گفتاری باشد نادیده گرفته می‌شود
     assert suggested_model("use models/gemini-3.8-flash-tts") is None
+
+
+def _ollama_cfg(tmp_path: Path, **llm_extra) -> Config:
+    payload = {"enabled": True, "provider": "ollama", "ollama_url": "http://127.0.0.1:11434",
+               "ollama_model": "qwen2.5:7b-instruct", **llm_extra}
+    return Config({"llm": payload}, root=tmp_path)
+
+
+def test_local_model_has_no_hourly_quota_by_default(tmp_path: Path) -> None:
+    """مدل محلی پول نمی‌گیرد؛ سقف ۱۲تاییِ عصرِ gemini نباید ایجنت را بخواباند."""
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path), tmp_path / "calls.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert advisor.max_calls_per_hour == 0
+    assert advisor.quota_left() is None
+    assert advisor.quota_label() == "بدون سقف"
+    for _ in range(5):
+        assert advisor.chat([{"role": "user", "content": "x"}]) == "{}"
+
+
+def test_quota_is_an_explicit_error_with_a_way_out(tmp_path: Path) -> None:
+    from tradeagent.llm import QuotaExceeded
+
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path, max_calls_per_hour=2), tmp_path / "calls.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    advisor.chat([{"role": "user", "content": "x"}])
+    advisor.chat([{"role": "user", "content": "x"}])
+    try:
+        advisor.chat([{"role": "user", "content": "x"}])
+    except QuotaExceeded as exc:
+        assert "--max-calls-per-hour 0" in str(exc)
+        assert getattr(exc, "quota", False)
+    else:  # pragma: no cover
+        raise AssertionError("باید QuotaExceeded می‌داد")

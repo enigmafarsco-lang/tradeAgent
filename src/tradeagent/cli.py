@@ -436,6 +436,8 @@ def cmd_studio(cfg: Any, args: Any) -> int:
             cfg.set("llm.ollama_url", args.ollama_url)
         if args.num_ctx:
             cfg.set("llm.ollama_num_ctx", args.num_ctx)
+        if getattr(args, "max_calls_per_hour", None) is not None:
+            cfg.set("llm.max_calls_per_hour", args.max_calls_per_hour)
         advisor = LLMAdvisor(cfg, cfg.state_dir / "llm_calls.json")
         ok, why = advisor.preflight()
         if not ok and not args.ollama_url:
@@ -450,7 +452,7 @@ def cmd_studio(cfg: Any, args: Any) -> int:
                     print(f"  مدل روی {alt} جواب داد؛ همان استفاده می‌شود.")
                     break
         if ok:
-            print(f"  مدل: آماده است ({why[:40]})")
+            print(f"  مدل: آماده است · {advisor.ollama_model} · سقف فراخوانی: {advisor.quota_label()}")
 
             def chat(messages):  # noqa: ANN001, ANN202
                 return advisor.chat(messages)

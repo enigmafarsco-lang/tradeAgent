@@ -63,6 +63,12 @@ SYSTEM_PROMPT = """تو یک مشاور ریسک برای یک سیستم معا
 نیست، همان سیاست فعلی را با تغییر صفر و confidence پایین برگردان."""
 
 
+class QuotaExceeded(RuntimeError):
+    """سقف فراخوانی پر است — خطای مدل نیست، پس نباید مدارشکن را بزند."""
+
+    quota = True
+
+
 @dataclass
 class LLMResult:
     proposal: dict[str, Any] | None
@@ -122,7 +128,11 @@ class LLMAdvisor:
         self.ollama_num_ctx = int(cfg.get("llm.ollama_num_ctx", 2048) or 2048)
         self.timeout = float(cfg.get("llm.timeout_s", 45))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
-        self.max_calls_per_hour = max(0, int(cfg.get("llm.max_calls_per_hour", 12)))
+        # ۰ یعنی بدون سقف: مدل محلی پول نمی‌گیرد، پس سقفِ ساعت‌یِ مدل ابری اینجا معنا ندارد
+        self.max_calls_per_hour = max(0, int(cfg.get("llm.max_calls_per_hour", 0)))
+        if self.provider != "ollama" and self.max_calls_per_hour == 0:
+            # مدل ابری سهمیه دارد؛ بی‌سقف گذاشتنش به ۴۲۹ می‌خورد
+            self.max_calls_per_hour = 60
         self.key_env = str(cfg.get("llm.gemini_api_key_env", "GEMINI_API_KEY"))
 
     # -- وضعیت ---------------------------------------------------------
@@ -152,6 +162,18 @@ class LLMAdvisor:
         now = time.time()
         return len([c for c in self._calls() if now - c < 3600])
 
+    def quota_left(self) -> int | None:
+        """چند فراخوانی دیگر تا پر شدن سقف؛ None یعنی سقفی نیست."""
+        if self.max_calls_per_hour <= 0:
+            return None
+        return max(0, self.max_calls_per_hour - self.calls_last_hour())
+
+    def quota_label(self) -> str:
+        if self.max_calls_per_hour <= 0:
+            return "بدون سقف"
+        left = self.quota_left() or 0
+        return f"{left} از {self.max_calls_per_hour} در این ساعت"
+
     def should_consult(self, cycle: int, force: bool = False) -> bool:
         ok, _ = self.available()
         if not ok:
@@ -160,7 +182,8 @@ class LLMAdvisor:
             return True
         if cycle % self.every_cycles != 0:
             return False
-        return self.calls_last_hour() < self.max_calls_per_hour
+        left = self.quota_left()
+        return left is None or left > 0
 
     # -- پیش‌پرواز ------------------------------------------------------
     def preflight(self) -> tuple[bool, str]:
@@ -281,10 +304,11 @@ class LLMAdvisor:
         ok, why = self.available()
         if not ok:
             raise RuntimeError(why or "مدل در دسترس نیست")
-        if self.calls_last_hour() >= self.max_calls_per_hour:
-            raise RuntimeError(
-                f"سهمیهٔ ساعتی مدل ({self.max_calls_per_hour}) پر است — "
-                "llm.max_calls_per_hour را در کانفیگ بالا ببر"
+        left = self.quota_left()
+        if left is not None and left <= 0:
+            raise QuotaExceeded(
+                f"سقف فراخوانی مدل در ساعت ({self.max_calls_per_hour}) پر شد — "
+                "با «--max-calls-per-hour 0» برش دار (۰ = بدون سقف)"
             )
         self._record_call()
         if self.provider == "ollama":
@@ -355,8 +379,11 @@ class LLMAdvisor:
         if not ok:
             meta["error"] = why
             return LLMResult(None, meta)
-        if not force and self.calls_last_hour() >= self.max_calls_per_hour:
-            meta["error"] = f"سهمیه‌ی ساعتی ({self.max_calls_per_hour}) پر است"
+        left = self.quota_left()
+        if not force and left is not None and left <= 0:
+            meta["error"] = (f"سقف فراخوانی مدل در ساعت ({self.max_calls_per_hour}) پر شد؛ "
+                             "«--max-calls-per-hour 0» یعنی بدون سقف")
+            meta["quota"] = True
             return LLMResult(None, meta)
 
         prompt = self._build_prompt(context)

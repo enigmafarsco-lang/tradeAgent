@@ -65,6 +65,27 @@ def test_studio_uses_the_model_when_it_answers(tmp_path) -> None:
     assert studio2.preds[-1].source == "cache"
 
 
+def test_quota_does_not_trip_the_circuit_breaker(tmp_path) -> None:
+    """سقف فراخوانی خطای مدل نیست: مدل نباید «قطع» شود، فقط صبر می‌کند."""
+    from tradeagent.llm import QuotaExceeded
+
+    logs = make_logs(tmp_path)
+    calls = {"n": 0}
+
+    def chat(_messages):
+        calls["n"] += 1
+        raise QuotaExceeded("سقف فراخوانی مدل در ساعت (2) پر شد — با «--max-calls-per-hour 0» برش دار")
+
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=chat, flat_bp=0.0, horizon=2)
+    studio.walk(limit=5)
+    st = studio.stats()
+    assert st["model_down"] is False
+    assert st["failures"] == 0
+    assert st["quota_hits"] >= 1
+    assert calls["n"] >= 1
+    assert all(p.source == "rule" for p in studio.preds)
+
+
 def test_a_broken_model_falls_back_to_the_rule(tmp_path) -> None:
     logs = make_logs(tmp_path)
 

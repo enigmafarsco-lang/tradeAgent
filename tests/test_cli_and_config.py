@@ -218,6 +218,6 @@ def test_gold_config_allows_a_whole_cycle_of_model_calls() -> None:
     cfg = tomllib.loads((Path(__file__).resolve().parents[1] / "configs" / "gold.toml").read_text(encoding="utf-8"))
     llm = cfg.get("llm", {})
     agent = cfg.get("agent", {})
-    per_hour = int(llm.get("max_calls_per_hour", 12))
+    per_hour = int(llm.get("max_calls_per_hour", 0))
     rounds = int(agent.get("max_rounds", 3))
-    assert per_hour >= rounds * 10, "با ۲۰ فراخوانی در ساعت، ایجنت وسط کار می‌خوابد"
+    assert per_hour == 0 or per_hour >= rounds * 10, "سقف کم، ایجنت را وسط کار می‌خواباند"
