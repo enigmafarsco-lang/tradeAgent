@@ -1,0 +1,2 @@
+time_utc,direction,confidence,entry,actual_bp,hit,source,reason
+2025-10-09T09:22:00Z,up,0.70,3639.920,,,ollama,"شتاب ۵ دقیقه مثبت ۳.۲bp و سرعت صعودی است"

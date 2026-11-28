@@ -1,0 +1,62 @@
+{
+  "symbol": "XAUUSD_i",
+  "generated": "2026-11-28T18:24:12Z",
+  "data": {
+    "candles": 301,
+    "first": 1759999980,
+    "last": 1760017980,
+    "gaps": 0,
+    "files": 2,
+    "ticks": 50400,
+    "source": "/tmp/jsonllogs"
+  },
+  "settings": {
+    "horizon_candles": 3,
+    "step_min": 1,
+    "flat_bp": 3.0,
+    "cost_bp": 1.0,
+    "min_conf": 0.0,
+    "window": 30
+  },
+  "totals": {
+    "decisions": 1,
+    "scored": 0,
+    "hit_pct": 0.0,
+    "directional": 0,
+    "directional_hit_pct": 0.0,
+    "avg_actual_bp": 0.0,
+    "model_errors": 0,
+    "model_down": false,
+    "quota_hits": 0,
+    "quota_error": "",
+    "frozen_skipped": 0,
+    "avg_abs_move_bp": 0.0,
+    "breakeven_ok": false
+  },
+  "trades": {
+    "trades": 1,
+    "closed": 0,
+    "open": 1,
+    "wins": 0,
+    "win_pct": 0.0,
+    "net_bp": 0,
+    "avg_bp": 0.0,
+    "cost_paid_bp": 0.0,
+    "gross_bp": 0.0
+  },
+  "by_direction": {},
+  "by_source": {},
+  "by_hour": {},
+  "recent": [
+    {
+      "t": "10-09 09:22",
+      "direction": "up",
+      "confidence": 0.7,
+      "entry": 3639.92,
+      "actual_bp": null,
+      "hit": null,
+      "source": "ollama",
+      "reason": "شتاب ۵ دقیقه مثبت ۳.۲bp و سرعت صعودی است"
+    }
+  ]
+}

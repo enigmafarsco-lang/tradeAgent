@@ -126,9 +126,21 @@ class LLMAdvisor:
             LOG.warning("مدل ollama «%s» متنی نیست؛ یک مدل متنی بگذار", self.ollama_model)
         self.ollama_url = str(cfg.get("llm.ollama_url", "http://127.0.0.1:11434")).rstrip("/")
         self.ollama_num_ctx = int(cfg.get("llm.ollama_num_ctx", 2048) or 2048)
-        self.timeout = float(cfg.get("llm.timeout_s", 45))
-        # تصمیم کندلی یک JSON کوچک است؛ ۷۰۰ توکن روی CPU یعنی دقیقه‌ها انتظار
-        self.num_predict = max(32, int(cfg.get("llm.num_predict", 160)))
+        # مدل محلی روی CPU: ۴۵ ثانیه برای یک تصمیم کافی نیست، ۱۸۰ ثانیه هست.
+        # عددِ کمِ کهنه در کانفیگ فقط با llm.timeout_strict (فلگ --timeout) اعمال می‌شود.
+        is_local = str(cfg.get("llm.provider", "") or "").lower() == "ollama"
+        configured_timeout = float(cfg.get("llm.timeout_s", 0) or 0)
+        strict_timeout = bool(cfg.get("llm.timeout_strict", False))
+        self.timeout_note = ""
+        if is_local and not strict_timeout:
+            self.timeout = max(120.0, configured_timeout)
+            if configured_timeout and configured_timeout < 120:
+                self.timeout_note = (f"(مهلت {configured_timeout:g} ثانیه در کانفیگ کم بود؛ "
+                                     f"{self.timeout:g} ثانیه شد)")
+        else:
+            self.timeout = configured_timeout or (180.0 if is_local else 45.0)
+        # تصمیم کندلی یک JSON هشت‌فیلدی است؛ ۷۰۰ توکن روی CPU یعنی دقیقه‌ها انتظار
+        self.num_predict = max(32, int(cfg.get("llm.num_predict", 96)))
         self.every_cycles = max(1, int(cfg.get("llm.every_cycles", 3)))
         # ۰ یعنی بدون سقف: مدل محلی پول نمی‌گیرد، پس سقفِ ساعتی مدل ابری اینجا معنا ندارد.
         # عددِ کهنه در configs/local.toml هم نمی‌تواند ایجنت را بخواباند؛ سقف فقط با

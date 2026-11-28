@@ -432,12 +432,17 @@ def cmd_studio(cfg: Any, args: Any) -> int:
 
     chat = None
     if not args.no_llm:
+        # استودیو روی دادهٔ آفلاین با مدل محلی تصمیم می‌گیرد؛ مسیر gemini مال چرخهٔ زنده است
+        cfg.set("llm.provider", "ollama")
         if args.model:
             cfg.set("llm.ollama_model", args.model)
         if args.ollama_url:
             cfg.set("llm.ollama_url", args.ollama_url)
         if args.num_ctx:
             cfg.set("llm.ollama_num_ctx", args.num_ctx)
+        if getattr(args, "timeout", None):
+            cfg.set("llm.timeout_s", args.timeout)
+            cfg.set("llm.timeout_strict", True)
         if getattr(args, "max_calls_per_hour", None) is not None:
             cfg.set("llm.max_calls_per_hour", args.max_calls_per_hour)
             cfg.set("llm.quota_strict", True)     # فقط وقتی خودش خواسته سقف اعمال می‌شود
@@ -457,7 +462,9 @@ def cmd_studio(cfg: Any, args: Any) -> int:
         if ok:
             note = getattr(advisor, "quota_note", "")
             print(f"  مدل: آماده است · {advisor.ollama_model} · سقف فراخوانی: {advisor.quota_label()}"
-                  + (f" {note}" if note else ""))
+                  + (f" {note}" if note else "")
+                  + f" · مهلت هر پاسخ {advisor.timeout:g} ثانیه · حداکثر {advisor.num_predict} توکن"
+                  + (f" {advisor.timeout_note}" if getattr(advisor, "timeout_note", "") else ""))
 
             def chat(messages, num_predict=None):  # noqa: ANN001, ANN202
                 return advisor.chat(messages, num_predict)

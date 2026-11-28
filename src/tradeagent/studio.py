@@ -37,7 +37,7 @@ PREDICT_PROMPT = """تو یک تحلیل‌گر روند طلا/شاخص هست�
  "reason":"یک جملهٔ فارسی کوتاه با عدد"}}
 
 قواعد: اگر نشانه‌ها متضادند direction را flat بگذار و confidence زیر ۰.۴. strength یعنی
-قدرت حرکت، confidence یعنی اطمینان به جهت. هیچ کلید دیگری اضافه نکن."""
+قدرت حرکت، confidence یعنی اطمینان به جهت. دلیل حداکثر ۱۲ کلمهٔ فارسی. هیچ کلید دیگری اضافه نکن."""
 
 
 @dataclass
@@ -122,18 +122,19 @@ def _utc(ts: Any) -> str:
 
 
 def _digest(candles: Sequence[Candle], i: int, window: int = 30) -> dict[str, Any]:
-    """تصویر عددی گذشته برای مدل: کندل‌های اخیر + ویژگی‌های مشتق‌شده."""
+    """تصویر عددی فشردهٔ گذشته برای مدل.
+
+    نسخهٔ اول ~۷۰۰ توکن بود؛ روی CPU همین پرامپت تنها ۳۰–۶۰ ثانیه طول می‌کشید و پاسخ به مهلت
+    نمی‌رسید. اینجا اعداد گرد شده و کلیدها کوتاه‌اند: همان اطلاعات، یک‌سوم توکن.
+    """
     feats = features_at(candles, i) or {}
-    recent = candles[max(0, i - window + 1): i + 1]
+    recent = candles[max(0, i - 7): i + 1]
     return {
-        "candles": [
-            {"t": c.t, "o": round(c.open, 3), "h": round(c.high, 3), "l": round(c.low, 3),
-             "c": round(c.close, 3), "ticks": c.ticks, "up": c.up_ticks, "down": c.down_ticks,
-             "spread_bp": round(c.spread_bps, 2)}
-            for c in recent[-12:]
-        ],
-        "features": {k: round(v, 3) for k, v in feats.items()},
-        "window_candles": len(recent),
+        # c = [open, high, low, close] برای ۸ کندل اخیر، قدیمی → جدید
+        "c": [[round(c.open, 2), round(c.high, 2), round(c.low, 2), round(c.close, 2)] for c in recent],
+        "f": {k: round(float(v), 2) for k, v in feats.items() if isinstance(v, (int, float))},
+        "w": window,
+        "unit": "bp=basis point, f=features of the last candle, c=last 8 M1 candles old→new",
     }
 
 
@@ -331,8 +332,13 @@ class Studio:
             self.last_error = f"{type(exc).__name__}: {exc}"[:200]
             if self._fail_streak >= 3 and not self.model_down:
                 self.model_down = True
-                LOG.warning("مدل سه بار پشت‌سرهم خطا داد؛ تا پایان این اجرا کنار گذاشته شد. "
-                            "برای عیب‌یابی: ./scripts/studio.sh --doctor")
+                if "timeout" in self.last_error.lower() or "timed out" in self.last_error.lower():
+                    LOG.warning("مدل سه بار به مهلت نرسید (روی CPU کند است)؛ تا پایان این اجرا کنار "
+                                "گذاشته شد. مدل کوچک‌تر: ./scripts/studio.sh --serve "
+                                "--model qwen2.5:1.5b-instruct · مهلت بیشتر: --timeout 300")
+                else:
+                    LOG.warning("مدل سه بار پشت‌سرهم خطا داد؛ تا پایان این اجرا کنار گذاشته شد. "
+                                "برای عیب‌یابی: ./scripts/studio.sh --doctor")
             LOG.warning("پیش‌بینی با مدل نشد (%s)؛ قاعدهٔ تکانه جایش را می‌گیرد", self.last_error)
             out = momentum_rule(self.candles, i, self.flat_bp)
             out["source"] = "rule"

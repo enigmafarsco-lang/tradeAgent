@@ -409,3 +409,18 @@ def test_ctrl_c_is_a_clean_exit() -> None:
         assert cli.main(["studio"]) == 0
     finally:
         cli.cmd_studio = original
+
+
+def test_the_prompt_is_small_enough_for_a_cpu_model(tmp_path) -> None:
+    import json as _json
+
+    from tradeagent.studio import PREDICT_PROMPT, _digest
+
+    logs = make_logs(tmp_path)
+    studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=None, flat_bp=0.0)
+    studio.ensure_data()
+    digest = _digest(studio.candles, len(studio.candles) // 2)
+    text = _json.dumps(digest, ensure_ascii=False)
+    assert len(text) < 1200, f"پرامپت بلند = انتظار طولانی روی CPU ({len(text)} کاراکتر)"
+    assert "f" in digest and "c" in digest and len(digest["c"]) <= 8
+    assert len(PREDICT_PROMPT.format(horizon=3, digest=text)) < 2000

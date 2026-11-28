@@ -239,3 +239,27 @@ def test_default_budget_is_small(tmp_path: Path) -> None:
     advisor = LLMAdvisor(_ollama_cfg(tmp_path), tmp_path / "calls.json",
                          transport=lambda *a, **k: {"message": {"content": "{}"}})
     assert advisor.num_predict <= 256
+
+
+def test_local_model_gets_a_long_enough_deadline(tmp_path: Path) -> None:
+    """۴۵ ثانیه برای ۷b روی CPU کم بود؛ هر سه فراخوانی timeout می‌شد."""
+    local = LLMAdvisor(_ollama_cfg(tmp_path), tmp_path / "c.json",
+                       transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert local.timeout >= 120
+    cloud = LLMAdvisor(Config({"llm": {"enabled": True, "provider": "gemini", "model": "gemini-3.8-flash"}},
+                              root=tmp_path), tmp_path / "c2.json")
+    assert cloud.timeout <= 60
+
+
+def test_a_small_deadline_in_the_config_is_raised_for_the_local_model(tmp_path: Path) -> None:
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path, timeout_s=45), tmp_path / "c.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert advisor.timeout >= 120
+    assert "کم بود" in advisor.timeout_note
+
+
+def test_an_explicit_deadline_is_respected(tmp_path: Path) -> None:
+    advisor = LLMAdvisor(_ollama_cfg(tmp_path, timeout_s=30, timeout_strict=True), tmp_path / "c.json",
+                         transport=lambda *a, **k: {"message": {"content": "{}"}})
+    assert advisor.timeout == 30
+    assert advisor.timeout_note == ""

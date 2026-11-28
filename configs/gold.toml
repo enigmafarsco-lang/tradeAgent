@@ -23,7 +23,7 @@ ollama_url = "http://127.0.0.1:11434"
 ollama_model = "qwen2.5:7b-instruct"
 every_cycles = 1          # برای طلا هر چرخه از مدل بپرس
 max_calls_per_hour = 0     # ۰ = بدون سقف (مدل محلی)؛ ایجنت روی هر قدم تا ۱ فراخوانی لازم دارد
-timeout_s = 90
+timeout_s = 300   # ۷b روی CPU؛ ۹۰ ثانیه کافی نبود
 
 [mcp]
 server_cmd = "trade-mcp serve"
