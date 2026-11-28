@@ -187,6 +187,8 @@ class Replay:
         steps: list[Step] = []
         next_step = 0
         started = time.time()
+        failures = 0
+        last_error = ""
         for bar in iter_second_bars(files):
             buf.append(bar)
             if len(buf) < 60:
@@ -194,7 +196,13 @@ class Replay:
             if next_step == 0:
                 next_step = bar.t + self.warmup_s
             if bar.t >= next_step:
-                pred = self.predictor(list(buf), self.horizon_s)
+                try:
+                    pred = self.predictor(list(buf), self.horizon_s)
+                except Exception as exc:  # noqa: BLE001 - مدل ممکن است قطع باشد
+                    failures += 1
+                    last_error = f"{type(exc).__name__}: {exc}"[:300]
+                    LOG.warning("پیش‌بینی ناموفق: %s", last_error)
+                    pred = {}
                 if pred:
                     steps.append(Step(ts=bar.t, price=bar.close, pred=pred, due_ts=bar.t + self.horizon_s))
                 next_step = bar.t + self.step_s
@@ -213,6 +221,8 @@ class Replay:
                 "step_s": self.step_s,
                 "horizon_s": self.horizon_s,
                 "elapsed_s": round(time.time() - started, 1),
+                "failures": failures,
+                "last_error": last_error,
                 "files": [p.name for p in files],
             }
         )

@@ -78,3 +78,24 @@ def test_model_predict_parses_a_reply() -> None:
     pred = model_predict(chat, bars, 300)
     assert pred["direction"] == "up" and pred["expected_bp"] == 2.5
     assert pred["analysis"].startswith("قیمت")
+
+
+def test_a_dead_model_does_not_kill_the_replay(tmp_path) -> None:
+    """ollama 503 داد؛ بازپخش باید ادامه بدهد و تعداد شکست را گزارش کند، نه traceback."""
+    root = make_ticks(tmp_path)
+    calls = {"n": 0}
+
+    def predictor(bars, horizon):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("HTTP Error 503: Service Unavailable")
+        return {"direction": "up", "phase": "steady", "strength": 0.5, "confidence": 0.5,
+                "horizon_s": horizon, "expected_bp": 0.0, "analysis": "بعد از خطا"}
+
+    run = Replay(root, "XAUUSD_i", predictor, step_s=300, horizon_s=300, warmup_s=600,
+                 out_dir=tmp_path / "out")
+    stats = run.run()
+    assert stats["ok"] is True
+    assert stats["failures"] == 2
+    assert "503" in stats["last_error"]
+    assert stats["steps"] >= 1

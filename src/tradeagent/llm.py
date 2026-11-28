@@ -253,7 +253,26 @@ class LLMAdvisor:
                 "options": {"temperature": 0.3, "num_predict": 700},
                 "messages": messages,
             }
-            data = self.transport(url, payload, {}, self.timeout)
+            # ollama هنگام بارگذاری مدل 503 می‌دهد؛ چند بار با تأخیر تلاش کن
+            last_exc: Exception | None = None
+            data = None
+            for attempt, pause in enumerate((0, 3, 8, 15)):
+                if pause:
+                    import time as _t
+
+                    _t.sleep(pause)
+                try:
+                    data = self.transport(url, payload, {}, self.timeout)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if "503" not in str(exc) and "timeout" not in str(exc).lower():
+                        raise
+            if data is None:
+                raise RuntimeError(
+                    f"مدل ollama جواب نداد (آخرین خطا: {last_exc}). "
+                    "بررسی کن: systemctl --user status ollama یا ollama list"
+                )
             try:
                 return str(data["message"]["content"])
             except (KeyError, TypeError):

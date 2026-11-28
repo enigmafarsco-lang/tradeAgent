@@ -222,6 +222,11 @@ def cmd_replay(cfg: Config, args: argparse.Namespace) -> int:
     if not stats.get("ok"):
         print("  " + str(stats.get("error")))
         return 1
+    if stats.get("failures"):
+        print(f"  پیش‌بینی‌های ناموفق: {stats['failures']} · آخرین خطا: {stats.get('last_error')}")
+    if not stats.get("steps") and stats.get("failures"):
+        print("  هیچ پیش‌بینی‌ای ساخته نشد؛ اول مدل را بالا بیاور (ollama serve) بعد دوباره.")
+        return 1
     print(f"  پیش‌بینی: {stats['steps']} · سنجیده: {stats['scored']} · درست: {stats['hit_pct']}% "
           f"· میانگین خالص: {stats['avg_net_bp']}bp · {stats['elapsed_s']}s")
     for direction, bucket in sorted((stats.get("by_direction") or {}).items()):
