@@ -72,9 +72,11 @@ def test_a_broken_model_falls_back_to_the_rule(tmp_path) -> None:
         raise RuntimeError("HTTP 503: Service Unavailable")
 
     studio = Studio(logs, "XAUUSD_i", tmp_path / "st", chat=chat, step_min=1, horizon=3)
-    result = studio.walk(limit=6)
-    assert result["ok"] and result["failures"] == 6
+    result = studio.walk(limit=10)
+    assert result["ok"]
+    assert result["failures"] == 3              # مدارشکن بعد از سه خطا مدل را کنار می‌گذارد
     assert "503" in result["last_error"]
+    assert result["model_down"] is True
     assert all(p.source == "rule" for p in studio.preds)
 
 

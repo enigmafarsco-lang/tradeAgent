@@ -343,6 +343,7 @@ class Studio:
             "net_bp": round(net, 2) if bets else 0.0,
             "avg_bp": round(net / len(bets), 2) if bets else 0.0,
             "failures": self.failures,
+            "model_down": self.model_down,
             "last_error": self.last_error,
         }
 
